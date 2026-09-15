@@ -7,10 +7,7 @@ const log = (...values) => { const line = values.join(' '); fs.appendFileSync('.
 fs.writeFileSync('.local/smoke.log', 'START\n');
 app.setPath('userData', path.resolve(`.local/smoke-profile-${Date.now()}`));
 dialog.showErrorBox = (title, message) => log('APP_ERROR', title, message);
-const realOpenDialog = dialog.showOpenDialog.bind(dialog);
-dialog.showOpenDialog = (win, options) => options.title === 'VST3プラグインを選択'
-  ? Promise.resolve({ canceled: false, filePaths: ['C:\\Program Files\\Common Files\\VST3\\Bevel EQ.vst3'] })
-  : realOpenDialog(win, options);
+dialog.showOpenDialog = () => { throw Error('Unexpected native file dialog'); };
 app.on('will-quit', () => log('QUIT'));
 let audioPackets = 0;
 ipcMain.on('audio', (_event, data) => { if (data instanceof ArrayBuffer && data.byteLength === 8192) audioPackets++; });
@@ -32,13 +29,26 @@ app.whenReady().then(async () => {
     }
     throw Error(`Plugin rack did not reach ${count}`);
   }
-  await win.webContents.executeJavaScript('window.mizu.invoke("plugin-add")');
+  async function addFromCatalog() {
+    await win.webContents.executeJavaScript('document.getElementById("plugin-add").click()');
+    for (let i = 0; i < 100; i++) {
+      const ready = await win.webContents.executeJavaScript('document.querySelectorAll(".catalog-plugin").length > 0');
+      if (ready) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    await win.webContents.executeJavaScript(`(() => { const search = document.getElementById('plugin-search'); search.value = 'Bevel EQ'; search.dispatchEvent(new Event('input')); })()`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    try { fs.writeFileSync('.local/catalog-smoke.png', (await win.webContents.capturePage()).toPNG()); }
+    catch (error) { log('CAPTURE_UNAVAILABLE', error.message); }
+    await win.webContents.executeJavaScript(`(() => { const row = [...document.querySelectorAll('.catalog-plugin')].find(el => el.querySelector('strong').textContent === 'Bevel EQ'); if (!row) throw Error('Bevel EQ missing'); row.querySelector('button').click(); })()`);
+  }
+  await addFromCatalog();
   await waitPluginCount(1);
-  await win.webContents.executeJavaScript('window.mizu.invoke("plugin-add")');
+  await addFromCatalog();
   const plugins = await waitPluginCount(2);
   for (const plugin of plugins) await win.webContents.executeJavaScript(`window.mizu.invoke('plugin-action', 'remove', ${plugin.id})`);
   await waitPluginCount(0);
-  await win.webContents.executeJavaScript('window.mizu.invoke("plugin-add")');
+  await addFromCatalog();
   const again = await waitPluginCount(1);
   await win.webContents.executeJavaScript(`window.mizu.invoke('plugin-action', 'remove', ${again[0].id})`);
   await waitPluginCount(0);
@@ -83,11 +93,17 @@ app.whenReady().then(async () => {
   log('SMOKE_UI', JSON.stringify(result));
   if (!result.settingsVisible || result.ruleCount !== 1 || result.categories < 15) throw Error('Settings UI smoke check failed');
   if (result.webhookType !== 'url' || !result.removedStatus) throw Error('Requested UI cleanup missing');
-  fs.mkdirSync('.local', { recursive: true }); fs.writeFileSync('.local/settings-smoke.png', (await win.webContents.capturePage()).toPNG());
+  try { fs.writeFileSync('.local/settings-smoke.png', (await win.webContents.capturePage()).toPNG()); }
+  catch (error) { log('CAPTURE_UNAVAILABLE', error.message); }
   await win.webContents.executeJavaScript('document.querySelector(".webhook").value = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz123456"; document.getElementById("save").click()');
   await new Promise(resolve => setTimeout(resolve, 250));
   const saved = await win.webContents.executeJavaScript('window.mizu.invoke("initial").then(x => ({ rules: x.settings.rules.length, forwarding: x.settings.forwarding }))');
   if (saved.rules !== 1 || saved.forwarding) throw Error('Encrypted settings save failed');
   log('SMOKE_SETTINGS', JSON.stringify(saved));
+  await win.webContents.executeJavaScript('document.getElementById("settings-button").click()');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const toggled = await win.webContents.executeJavaScript('document.getElementById("settings").hidden && !document.getElementById("settings-close")');
+  if (!toggled) throw Error('Settings toggle failed');
+  log('SMOKE_SETTINGS_TOGGLE', 'passed');
   win.close();
 }).catch(error => { log('FAIL', error.stack); app.exit(1); });

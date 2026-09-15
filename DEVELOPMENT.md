@@ -119,6 +119,14 @@ native/build/MizuAudioHost_artefacts/Release/MizuAudioHost.exe --test-resampling
 
 ## ソース構成
 
+### 0.1.3 の操作変更
+
+- 「プラグインを追加」でアプリ内の検索一覧を表示。Common Files/VST3、Steinberg/VstPlugins、VSTPlugins の3フォルダーを再帰スキャンします。
+- VST3ファイルとバンドルを検出し、バンドル内部は重複登録しません。追加インストール後は「再スキャン」で更新します。
+- ホストの対応形式は引き続きWindows x64のステレオVST3です。VST2のDLLは追加できず、検出件数のみ表示します。
+- 設定ボタンは設定／プレイヤーを切り替えます。切り替えても未保存の入力は保持し、保存ボタンで確定します。
+- `src/plugin-catalog.cjs` がファイル探索と選択IDの管理を担当します。
+
 `src/main.cjs`: Electron・IPC・拡張機能・ウィンドウ。`src/core.cjs`: URL／変数／入力検証。`src/forwarder.cjs`: YouTube API／Discord。`src/youtube-page.js`: 音声接続・音量補正・再生検出。`native/main.cpp`: VST3ホスト。`src/ui/`: 日本語の操作画面。
 
 ## 依存ライセンス・参照

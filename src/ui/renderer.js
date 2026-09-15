@@ -42,9 +42,61 @@ function fillSettings(value) {
 $('address-form').addEventListener('submit', event => { event.preventDefault(); void action('navigate', $('address').value.trim()); });
 $('back').onclick = () => action('back'); $('reload').onclick = () => action('reload');
 $('copy').onclick = async () => { const url = await action('copy'); if (url) toast(`コピーしました: ${url}`); };
-$('settings-button').onclick = async () => { const initial = await action('initial'); if (!initial) return; fillSettings(initial.settings); await action('settings-open', true); $('settings').hidden = false; };
-$('settings-close').onclick = async () => { $('settings').hidden = true; await action('settings-open', false); };
-$('plugin-add').onclick = () => action('plugin-add'); $('extension-select').onclick = () => action('extension-select');
+$('settings-button').onclick = async () => {
+  const open = $('settings').hidden;
+  $('settings').hidden = !open;
+  $('settings-button').setAttribute('aria-pressed', String(open));
+  await action('settings-open', open);
+};
+let catalogData, scanning = false;
+function renderCatalog() {
+  const query = $('plugin-search').value.trim().toLowerCase();
+  const matches = (catalogData?.plugins || []).filter(p => (p.name + ' ' + p.path).toLowerCase().includes(query));
+  $('catalog-list').replaceChildren();
+  for (const plugin of matches) {
+    const row = document.createElement('div'); row.className = 'catalog-plugin';
+    const info = document.createElement('div');
+    const name = document.createElement('strong'); name.textContent = plugin.name;
+    const location = document.createElement('small'); location.textContent = plugin.path;
+    info.append(name, location);
+    const add = button('追加', async () => {
+      add.disabled = true;
+      try { await invoke('plugin-add', plugin.id); await closePicker(); }
+      catch (error) { toast(error.message); }
+      finally { add.disabled = false; }
+    });
+    row.append(info, add); $('catalog-list').append(row);
+  }
+  if (!matches.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = query ? '一致するプラグインがありません。' : 'VST3が見つかりません。インストール後に再スキャンしてください。'; $('catalog-list').append(empty); }
+  $('catalog-status').textContent = matches.length + ' / ' + (catalogData?.plugins.length || 0) + ' 件の VST3' + (catalogData?.dllCount ? ' · 未対応の DLL ' + catalogData.dllCount + ' 件' : '');
+}
+async function scanCatalog(refresh = false) {
+  if (scanning) return;
+  scanning = true; $('plugin-rescan').disabled = true;
+  $('catalog-status').textContent = 'プラグインをスキャン中…';
+  try {
+    catalogData = await invoke('plugin-catalog', refresh);
+    $('catalog-roots').textContent = catalogData.roots.join('\n');
+    $('catalog-warnings').textContent = catalogData.warnings.join('\n');
+    renderCatalog();
+  } catch (error) { $('catalog-status').textContent = 'スキャンに失敗しました: ' + error.message; }
+  finally { scanning = false; $('plugin-rescan').disabled = false; }
+}
+async function closePicker() {
+  $('plugin-picker').close();
+  await action('plugin-picker-open', false);
+  $('plugin-add').focus();
+}
+$('plugin-add').onclick = async () => {
+  await action('plugin-picker-open', true);
+  $('plugin-picker').showModal(); $('plugin-search').focus();
+  await scanCatalog();
+};
+$('picker-close').onclick = closePicker;
+$('plugin-picker').addEventListener('cancel', event => { event.preventDefault(); void closePicker(); });
+$('plugin-search').oninput = () => { if (!scanning) renderCatalog(); };
+$('plugin-rescan').onclick = () => scanCatalog(true);
+$('extension-select').onclick = () => action('extension-select');
 $('rule-add').onclick = () => { if ($('rules').children.length < 50) addRule(); else toast('転送先は50件までです'); };
 $('save').onclick = async () => {
   const rules = [...document.querySelectorAll('.rule')].map(el => ({ categoryId: el.querySelector('.category').value, url: el.querySelector('.webhook').value.trim(), format: el.querySelector('.format').value }));

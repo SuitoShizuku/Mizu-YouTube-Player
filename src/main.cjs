@@ -3,6 +3,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { SettingsStore } = require('./settings.cjs');
+const { PluginCatalog } = require('./plugin-catalog.cjs');
+const catalog = new PluginCatalog();
 const { AudioHost } = require('./audio-host.cjs');
 const { Forwarder } = require('./forwarder.cjs');
 const { LoginWindow } = require('./login.cjs');
@@ -11,7 +13,7 @@ const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { CATEGORY_LIST, VARIABLES, shortUrl, videoId, playbackUrl, isYouTube } = require('./core.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'mizu-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 app.setName('Mizu YouTube Player');
-let win, view, store, host, forwarder, extensions, login, settingsOpen = false;
+let win, view, store, host, forwarder, extensions, login, settingsOpen = false, pickerOpen = false;
 let status = { audio: 'VSTホストを起動中', extension: 'uBlock Origin 未導入', plugins: [], loadingPlugin: '', url: 'https://www.youtube.com/' };
 const shellUrl = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 function publish() { if (win && !win.isDestroyed()) win.webContents.send('state', status); }
@@ -20,7 +22,7 @@ function bounds() {
   if (!win || !view) return;
   const [width, height] = win.getContentSize();
   view.setBounds({ x: 0, y: 76, width: Math.max(1, width - 312), height: Math.max(1, height - 104) });
-  view.setVisible(!settingsOpen);
+  view.setVisible(!settingsOpen && !pickerOpen);
 }
 function trusted(event) { return event.sender === win?.webContents && event.senderFrame?.url === shellUrl; }
 function playerEvent(event) { return event.sender === view?.webContents && event.senderFrame === view.webContents.mainFrame && isYouTube(event.senderFrame.url); }
@@ -140,14 +142,12 @@ async function createWindow() {
     const result = await dialog.showOpenDialog(win, { title: 'uBlock Originのmanifest.jsonがあるフォルダー', properties: ['openDirectory'] });
     if (!result.canceled) { await loadExtension(result.filePaths[0]); fs.writeFileSync(path.join(app.getPath('userData'), 'extension-path.json'), JSON.stringify(result.filePaths[0])); }
   });
-  handle('plugin-add', async () => {
+  handle('plugin-catalog', refresh => catalog.scan(refresh === true));
+  handle('plugin-picker-open', open => { pickerOpen = !!open; bounds(); });
+  handle('plugin-add', async id => {
+    const selected = catalog.resolve(id);
     await host.ensureReady();
-    const result = await dialog.showOpenDialog(win, { title: 'VST3プラグインを選択', defaultPath: 'C:\\Program Files\\Common Files\\VST3', properties: ['openFile', 'openDirectory'], filters: [{ name: 'VST3', extensions: ['vst3'] }] });
-    if (!result.canceled) {
-      const selected = result.filePaths[0];
-      if (!selected.toLowerCase().endsWith('.vst3')) throw Error('.vst3ファイルまたはバンドルを選択してください');
-      host.command(2, selected);
-    }
+    host.command(2, selected);
   });
   handle('plugin-action', (action, id) => {
     if (!['editor', 'remove', 'bypass'].includes(action) || !Number.isInteger(id) || !status.plugins.some(p => p.id === id)) throw Error('プラグイン操作が不正です');

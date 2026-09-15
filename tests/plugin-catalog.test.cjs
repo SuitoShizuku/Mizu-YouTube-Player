@@ -1,0 +1,24 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { PluginCatalog } = require('../src/plugin-catalog.cjs');
+test('discovers nested files and bundles once, refreshes and restricts selection', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mizu-catalog-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'Vendor', 'Bundle.vst3', 'Contents'), { recursive: true });
+  await fs.writeFile(path.join(root, 'Vendor', 'Bundle.vst3', 'Contents', 'inner.vst3'), '');
+  await fs.writeFile(path.join(root, 'Vendor', 'File.VST3'), '');
+  await fs.writeFile(path.join(root, 'legacy.dll'), '');
+  const catalog = new PluginCatalog([root, path.join(root, 'Vendor'), path.join(root, 'missing')]);
+  const result = await catalog.scan();
+  assert.deepEqual(result.plugins.map(p => p.name), ['Bundle', 'File']);
+  assert.equal(result.dllCount, 1);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(catalog.resolve(result.plugins[0].id), path.join(root, 'Vendor', 'Bundle.vst3'));
+  assert.throws(() => catalog.resolve('../outside.vst3'));
+  await fs.writeFile(path.join(root, 'New.vst3'), '');
+  assert.equal((await catalog.scan()).plugins.length, 2);
+  assert.equal((await catalog.scan(true)).plugins.length, 3);
+});

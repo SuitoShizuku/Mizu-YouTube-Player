@@ -30,6 +30,18 @@ child.stderr.on('data', async chunk => {
     const ui = await evaluate(shell.webSocketDebuggerUrl, '({ version: document.querySelector("footer").textContent, removedStatus: !document.querySelector(".flow, .signal, .rack-bottom, #audio-status, #extension-status") })');
     if (!ui.version.includes(require('../package.json').version) || !ui.removedStatus) throw Error('Packaged UI is not the updated version');
     console.log('PACKAGED_UI', JSON.stringify(ui));
+    const picker = await evaluate(shell.webSocketDebuggerUrl, `(async () => {
+      const catalog = await window.mizu.invoke('plugin-catalog');
+      await document.getElementById('plugin-add').onclick();
+      const visible = document.getElementById('plugin-picker').open;
+      await document.getElementById('picker-close').onclick();
+      await document.getElementById('settings-button').onclick();
+      const settingsVisible = !document.getElementById('settings').hidden;
+      await document.getElementById('settings-button').onclick();
+      return { count: catalog.plugins.length, visible, settingsVisible, returned: document.getElementById('settings').hidden };
+    })()`);
+    if (!picker.count || !picker.visible || !picker.settingsVisible || !picker.returned) throw Error('Packaged picker/settings toggle failed');
+    console.log('PACKAGED_PICKER', JSON.stringify(picker));
     if (process.argv.includes('--login')) {
       const player = targets.find(target => target.url.startsWith('https://www.youtube.com/'));
       if (!player) throw Error('YouTube target missing');
