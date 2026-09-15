@@ -1,0 +1,47 @@
+{
+  "name": "mizu-youtube-player",
+  "version": "0.1.2",
+  "private": true,
+  "description": "YouTube player with an internal Windows VST3 audio host",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check.cjs",
+    "native:configure": "cmake -S native -B native/build -A x64",
+    "native:build": "cmake --build native/build --config Release --parallel 4",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "jp.mizu.youtubeplayer",
+    "productName": "Mizu YouTube Player",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/build/MizuAudioHost_artefacts/Release/MizuAudioHost.exe",
+        "to": "MizuAudioHost.exe"
+      },
+      {
+        "from": "extensions",
+        "to": "extensions",
+        "filter": [
+          "**/*",
+          "!README.md"
+        ]
+      }
+    ],
+    "win": {
+      "target": "portable"
+    }
+  },
+  "dependencies": {
+    "electron-chrome-extensions": "^4.9.0"
+  }
+}
