@@ -33,12 +33,16 @@ class Chains {
     });
   }
   capture() { return this.run(async () => { if (this.protectLast || !this.host.ready) return; const last = await this.snapshot(); this.write({ ...this.data, last }); }); }
-  save(name) {
+  save(name, options = {}) {
     return this.run(async () => {
       if (typeof name !== 'string' || !name.trim() || name.trim().length > 80) throw Error('プリセット名を1〜80文字で入力してください');
-      name = name.trim(); const chain = await this.snapshot();
-      const presets = this.data.presets.filter(p => p.name !== name);
-      presets.push({ id: this.data.presets.find(p => p.name === name)?.id || randomUUID(), name, chain });
+      if (!options || !['create', 'update', undefined].includes(options.mode)) throw Error('保存方法が不正です');
+      name = name.trim();
+      const existing = options.mode === 'create' ? undefined : this.data.presets.find(p => options.mode === 'update' ? p.id === options.id : p.name === name);
+      if (options.mode === 'update' && !existing) throw Error('更新するプリセットが見つかりません');
+      const chain = await this.snapshot();
+      const presets = this.data.presets.filter(p => p.id !== existing?.id);
+      presets.push({ id: existing?.id || randomUUID(), name, chain });
       this.write({ ...this.data, presets, last: chain }); this.protectLast = false; return this.list();
     });
   }

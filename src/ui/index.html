@@ -18,7 +18,10 @@
   <aside>
     <div class="eyebrow">YOUR SOUND, YOUR SPACE</div><div class="rack-title"><h1>オーディオラック</h1><span class="pill">VST3</span></div>
     <div class="section-heading"><h2>エフェクト</h2><span id="plugin-count">0 / 16</span></div>
-    <section class="presets"><label class="field">チェーンプリセット<select id="preset-list" aria-label="保存済みプリセット"></select></label><div class="preset-actions"><button id="preset-load">読込</button><button id="preset-delete">削除</button></div><label class="field">保存名<input id="preset-name" maxlength="80" placeholder="例: リスニング用"></label><button id="preset-save" class="add">現在のチェーンを保存</button><p class="muted small">同名で保存すると上書きします。終了時のチェーンは次回起動時に自動復元します。</p></section><div id="plugins"></div>
+    <section class="presets" aria-label="チェーンプリセット">
+      <div class="preset-combo"><input id="preset-name" role="combobox" aria-label="プリセット名・選択" aria-haspopup="dialog" aria-expanded="false" aria-controls="preset-menu" autocomplete="off" maxlength="80" placeholder="プリセット名／選択"><button id="preset-toggle" class="tool-icon" aria-label="プリセット一覧" title="プリセット一覧" aria-expanded="false">⌄</button><button id="preset-save" class="tool-icon" aria-label="プリセットを保存" title="名前を入力して新規保存／選択中のプリセットを更新"></button></div>
+      <div id="preset-menu" role="dialog" aria-label="プリセット一覧" hidden></div>
+    </section><div id="plugins"></div>
     <p id="plugin-loading" class="muted small" role="status" hidden></p>
     <button id="plugin-add" class="add">＋ プラグインを追加</button>
     <p class="muted small">Windows x64 / ステレオ VST3<br>上から順番に音声を処理します。</p>

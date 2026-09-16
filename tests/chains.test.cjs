@@ -31,3 +31,12 @@ test('unavailable host, invalid snapshot and missing plugin cannot erase last sa
   await assert.rejects(chains.restore([{ path: path.join(os.tmpdir(), 'mizu-absent-plugin.vst3'), state: '', bypass: false }]));
   host.chain = []; await chains.capture(); assert.equal(fs.readFileSync(chains.file, 'utf8'), original);
 });
+test('typing creates a new preset even with the same name; selection updates only its ID', async t => {
+  const { chains } = fixture(t);
+  const first = await chains.save('Music', { mode: 'create' });
+  const second = await chains.save('Music', { mode: 'create' });
+  assert.equal(second.length, 2); assert.notEqual(second[0].id, second[1].id);
+  const updated = await chains.save('Music', { mode: 'update', id: first[0].id });
+  assert.equal(updated.length, 2); assert.equal(updated.at(-1).id, first[0].id);
+  await assert.rejects(chains.save('Music', { mode: 'update', id: 'missing' }));
+});

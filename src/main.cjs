@@ -13,14 +13,24 @@ const { LoginWindow } = require('./login.cjs');
 const { allowedNavigation, wasAborted } = require('./navigation.cjs');
 const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { CATEGORY_LIST, VARIABLES, shortUrl, videoId, playbackUrl, isYouTube } = require('./core.cjs');
+require('./realtime.cjs').configureRealtime(app);
 protocol.registerSchemesAsPrivileged([{ scheme: 'mizu-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 app.setName('Mizu YouTube Player');
 let chains, extensionFolder, autoSaveTimer, closing = false, closeAllowed = false;
+let realtimeTimer;
 let win, view, store, host, forwarder, extensions, login, settingsOpen = false, pickerOpen = false;
 let status = { audio: 'VSTホストを起動中', extension: 'uBlock Origin 未導入', plugins: [], loadingPlugin: '', url: 'https://www.youtube.com/' };
 const shellUrl = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 function publish() { if (win && !win.isDestroyed()) win.webContents.send('state', status); }
 function note(text) { if (win && !win.isDestroyed()) win.webContents.send('notice', String(text).slice(0, 1000)); }
+function maintainRealtimeScheduling() {
+  if (process.platform !== 'win32' || !host?.ready || closing) return;
+  // Windows 11 may ignore a muted, covered window's timer-resolution requests.
+  // Target only this application's own processes, including Chromium audio services.
+  const pids = new Set(app.getAppMetrics().map(metric => metric.pid));
+  pids.add(process.pid); if (host.process?.pid) pids.add(host.process.pid);
+  try { host.command(10, JSON.stringify([...pids])); } catch { /* Host restart retries on ready. */ }
+}
 function bounds() {
   if (!win || !view) return;
   const [width, height] = win.getContentSize();
@@ -65,7 +75,7 @@ async function createWindow() {
   let loadError;
   try { store.load(); } catch (error) { loadError = `保存済み設定を読めませんでした: ${error.message}`; }
   win = new BrowserWindow({ width: 1440, height: 920, minWidth: 1000, minHeight: 650, backgroundColor: '#0b111b', title: 'Mizu YouTube Player',
-    webPreferences: { preload: path.join(__dirname, 'shell-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
+    webPreferences: { preload: path.join(__dirname, 'shell-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
   win.setMenuBarVisibility(false);
   const playerSession = session.fromPartition('persist:mizu-youtube');
   extensions = new ElectronChromeExtensions({ session: playerSession, license: 'GPL-3.0',
@@ -107,7 +117,7 @@ async function createWindow() {
     if (closeAllowed) return;
     event.preventDefault();
     if (closing) return;
-    closing = true; clearInterval(autoSaveTimer);
+    closing = true; clearInterval(autoSaveTimer); clearInterval(realtimeTimer);
     (chains ? chains.capture() : Promise.resolve()).catch(error => {
       dialog.showErrorBox('エフェクトの保存に失敗しました', error.message + '\n前回保存したチェーンは維持されています。');
     }).finally(() => { closeAllowed = true; win.close(); });
@@ -137,7 +147,7 @@ async function createWindow() {
   catch (error) { loadError = 'エフェクトの保存データを読めませんでした: ' + error.message; }
   const requireChains = () => { if (closing) throw Error('終了処理中です'); if (!chains) throw Error('保存データを読み込めないためプリセット操作を停止しています'); return chains; };
   handle('presets', () => requireChains().list());
-  handle('preset-save', name => requireChains().save(name));
+  handle('preset-save', (name, options) => requireChains().save(name, options));
   handle('preset-load', id => requireChains().load(id));
   handle('preset-delete', id => requireChains().remove(id));
   handle('extensions-info', () => extensionFolder.info());
@@ -146,7 +156,8 @@ async function createWindow() {
   handle('extension-options', id => { openExtensionPage(extensionFolder.optionsUrl(id)); });
   host.on('status', message => { status.audio = message; status.plugins = host.plugins; status.loadingPlugin = ''; view.webContents.setAudioMuted(true); publish(); note(message); });
   host.on('event', event => {
-    if (event.type === 'ready') status.audio = 'ホスト接続済み · 48 kHz / Stereo';
+    if (event.type === 'ready') { status.audio = 'ホスト接続済み · 48 kHz / Stereo'; maintainRealtimeScheduling(); }
+    if (event.type === 'realtime-policy') return;
     if (event.type === 'plugins') status.plugins = event.plugins;
     if (event.type === 'plugin-loading') status.loadingPlugin = event.message;
     if (event.type === 'plugin-finished') status.loadingPlugin = '';
@@ -206,6 +217,7 @@ async function createWindow() {
   extensionFolder = new ExtensionFolder(path.join(app.getPath('userData'), 'Extensions'), playerSession, bundled, extensionLoaded);
   await win.loadFile(path.join(__dirname, 'ui/index.html'));
   bounds();
+  realtimeTimer = setInterval(maintainRealtimeScheduling, 2000);
   await host.ensureReady();
   if (chains) {
     try { await chains.restore(chains.data.last); } catch (error) { note(error.message); }

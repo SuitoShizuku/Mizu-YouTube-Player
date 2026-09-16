@@ -8,6 +8,10 @@
 #include <map>
 #include <deque>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <fcntl.h>
 #include <io.h>
 #endif
@@ -45,6 +49,10 @@ class Host : public juce::AudioIODeviceCallback, public juce::AudioSource, priva
     juce::MidiBuffer midi;
     int blockSize = 512, nextId = 1;
     std::atomic<bool> deviceReady { false }, discardQueuedAudio { false };
+    // Renderer IPC arrives in 1024-frame packets with scheduler jitter. Keep
+    // 64 ms of headroom instead of consuming each packet immediately.
+    static constexpr int prefillFrames = 3072;
+    bool buffering = true;
     juce::String lastDeviceError;
     std::map<juce::String, juce::PluginDescription> descriptionsByPath;
     std::deque<std::pair<uint32_t, juce::String>> pendingCommands;
@@ -91,11 +99,32 @@ class Host : public juce::AudioIODeviceCallback, public juce::AudioSource, priva
 public:
     Host() { formats.addFormat(new juce::VST3PluginFormat()); }
     ~Host() { stopTimer(); lifetime.reset(); devices.removeAudioCallback(this); chain.clear(); devices.closeAudioDevice(); }
+    bool testJitterBuffer() {
+        fifo.reset(); buffering = true;
+        juce::AudioBuffer<float> output(2, 128);
+        std::vector<char> packet(8192);
+        const float value = 0.1f;
+        for (size_t i = 0; i < packet.size(); i += sizeof(float)) std::memcpy(packet.data() + i, &value, sizeof(float));
+        int nextPacket = 0;
+        // Simulate 48 kHz delivery with alternating 0/10.7 ms scheduling delay.
+        for (int frame = 0; frame < 48000; frame += 128) {
+            while (nextPacket * 1024 + (nextPacket % 2 ? 512 : 0) <= frame) { push(packet); ++nextPacket; }
+            getNextAudioBlock(juce::AudioSourceChannelInfo(&output, 0, 128));
+            if (frame >= 4096 && std::abs(output.getSample(0, 127) - value) > 0.0001f) return false;
+        }
+        // After a long outage, wait for headroom before restarting playback.
+        for (int i = 0; i < 100; ++i) getNextAudioBlock(juce::AudioSourceChannelInfo(&output, 0, 128));
+        push(packet); getNextAudioBlock(juce::AudioSourceChannelInfo(&output, 0, 128));
+        if (output.getMagnitude(0, 128) != 0.0f) return false;
+        push(packet); push(packet); getNextAudioBlock(juce::AudioSourceChannelInfo(&output, 0, 128));
+        if (std::abs(output.getSample(0, 127) - value) > 0.0001f) return false;
+        message("jitter-test", "Jitter absorption and underrun recovery passed"); return true;
+    }
     bool testResampling() {
         // Offline regression: changing the physical sample rate must preserve pitch.
         // No output device is opened and no test tone reaches the speakers.
         for (const double rate : { 44100.0, 48000.0, 96000.0 }) {
-            fifo.reset();
+            fifo.reset(); buffering = true;
             resampler.setResamplingRatio(48000.0 / rate);
             resampler.prepareToPlay(512, rate);
             for (int packet = 0; packet < 4; ++packet) {
@@ -156,6 +185,28 @@ public:
         auto* event = new juce::DynamicObject(); event->setProperty("type", "plugins"); event->setProperty("plugins", plugins); emit(juce::var(event));
     }
     void command(uint32_t type, const juce::String& payload) {
+        if (type == 10) {
+#ifdef _WIN32
+            const auto ids = juce::JSON::parse(payload);
+            if (const auto* array = ids.getArray()) {
+                int applied = 0, failed = 0;
+                for (const auto& id : *array) {
+                    const auto pid = static_cast<DWORD>(static_cast<int>(id));
+                    if (pid == 0) continue;
+                    if (const auto process = OpenProcess(PROCESS_SET_INFORMATION, FALSE, pid)) {
+                        PROCESS_POWER_THROTTLING_STATE state {};
+                        state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+                        state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+                        state.StateMask = 0;
+                        if (SetProcessInformation(process, ProcessPowerThrottling, &state, sizeof(state))) ++applied; else ++failed;
+                        CloseHandle(process);
+                    } else ++failed;
+                }
+                message("realtime-policy", juce::String(applied) + " applied, " + juce::String(failed) + " unavailable");
+            }
+#endif
+            return;
+        }
         if (loadingPlugin) {
             if (pendingCommands.size() < 64) pendingCommands.emplace_back(type, payload);
             else message("error", "Too many pending plugin operations");
@@ -253,13 +304,22 @@ public:
     void audioDeviceError(const juce::String&) override { deviceReady = false; }
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override {
         info.clearActiveBufferRegion();
-        if (discardQueuedAudio.exchange(false)) fifo.finishedRead(fifo.getNumReady());
-        int a, na, b, nb; fifo.prepareToRead(info.numSamples, a, na, b, nb);
-        for (int ch = 0; ch < 2; ++ch) {
-            info.buffer->copyFrom(ch, info.startSample, samples[static_cast<size_t>(ch)].data() + a, na);
-            info.buffer->copyFrom(ch, info.startSample + na, samples[static_cast<size_t>(ch)].data() + b, nb);
+        if (discardQueuedAudio.exchange(false)) { fifo.finishedRead(fifo.getNumReady()); buffering = true; }
+        const auto ready = fifo.getNumReady();
+        bool consume = !(buffering && ready < std::max(prefillFrames, info.numSamples));
+        if (consume) {
+            buffering = false;
+            if (ready < info.numSamples) { buffering = true; consume = false; }
         }
-        fifo.finishedRead(na + nb);
+        if (consume) {
+            int a, na, b, nb; fifo.prepareToRead(info.numSamples, a, na, b, nb);
+            for (int ch = 0; ch < 2; ++ch) {
+                info.buffer->copyFrom(ch, info.startSample, samples[static_cast<size_t>(ch)].data() + a, na);
+                info.buffer->copyFrom(ch, info.startSample + na, samples[static_cast<size_t>(ch)].data() + b, nb);
+            }
+            fifo.finishedRead(na + nb);
+        }
+        // Keep processing silence while refilling so reverb/delay tails survive.
         const juce::ScopedTryLock lock(chainLock);
         if (!lock.isLocked()) { info.clearActiveBufferRegion(); return; }
         for (int offset = 0; offset < info.numSamples; offset += blockSize) {
@@ -284,6 +344,7 @@ int main(int argc, char* argv[]) {
 #endif
     juce::ScopedJuceInitialiser_GUI gui;
     Host host;
+    if (argc > 1 && juce::String(argv[1]) == "--test-jitter") return host.testJitterBuffer() ? 0 : 1;
     if (argc > 1 && juce::String(argv[1]) == "--test-resampling") return host.testResampling() ? 0 : 1;
     if (!host.start()) return 1;
     std::thread reader([&host] {
@@ -294,7 +355,7 @@ int main(int argc, char* argv[]) {
             std::vector<char> payload(header[1]);
             if (header[1] && std::fread(payload.data(), 1, payload.size(), stdin) != payload.size()) break;
             if (header[0] == 1) host.push(payload);
-            else if (header[0] >= 2 && header[0] <= 9) {
+            else if (header[0] >= 2 && header[0] <= 10) {
                 const auto text = juce::String::fromUTF8(payload.data(), static_cast<int>(payload.size()));
                 juce::MessageManager::callAsync([&host, type = header[0], text] { host.command(type, text); });
             }

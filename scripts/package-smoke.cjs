@@ -30,6 +30,9 @@ child.stderr.on('data', async chunk => {
     const ui = await evaluate(shell.webSocketDebuggerUrl, '({ version: document.querySelector("footer").textContent, removedStatus: !document.querySelector(".flow, .signal, .rack-bottom, #audio-status, #extension-status") })');
     if (!ui.version.includes(require('../package.json').version) || !ui.removedStatus) throw Error('Packaged UI is not the updated version');
     console.log('PACKAGED_UI', JSON.stringify(ui));
+    const compact = await evaluate(shell.webSocketDebuggerUrl, '({ height: document.querySelector(".presets").getBoundingClientRect().height, editable: document.getElementById("preset-name").getAttribute("role") === "combobox", saveIcon: !!document.querySelector("#preset-save svg"), removedButtons: !document.querySelector("#preset-load, #preset-delete, #preset-list") })');
+    if (compact.height > 40 || !compact.editable || !compact.saveIcon || !compact.removedButtons) throw Error('Packaged compact preset UI missing');
+    console.log('PACKAGED_COMPACT', JSON.stringify(compact));
     const picker = await evaluate(shell.webSocketDebuggerUrl, `(async () => {
       const catalog = await window.mizu.invoke('plugin-catalog');
       await document.getElementById('plugin-add').onclick();

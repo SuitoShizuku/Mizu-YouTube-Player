@@ -4,6 +4,21 @@ const invoke = (name, ...args) => window.mizu.invoke(name, ...args);
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(timer); timer = setTimeout(() => { $('toast').hidden = true; }, 6000); }
 async function action(name, ...args) { try { return await invoke(name, ...args); } catch (error) { toast(error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')); } }
 function button(label, callback) { const el = document.createElement('button'); el.textContent = label; el.addEventListener('click', callback); return el; }
+const iconPaths = {
+  power: 'M12 2v10 M5.6 5.6a9 9 0 1 0 12.8 0',
+  pen: 'm15 4 5 5 M3 21l5-1L21 7a2.1 2.1 0 0 0-5-5L3 15v6Z',
+  trash: 'M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7',
+  save: 'M4 3h13l4 4v14H3V3h1 M7 3v6h10V3 M7 21v-8h10v8',
+  close: 'm6 6 12 12 M18 6 6 18'
+};
+function setIcon(el, icon, label) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(svg.namespaceURI, 'path'); path.setAttribute('d', iconPaths[icon]); svg.append(path);
+  el.replaceChildren(svg); el.classList.add('tool-icon'); el.title = label; el.setAttribute('aria-label', label);
+  return el;
+}
+function iconButton(icon, label, callback) { return setIcon(button('', callback), icon, label); }
 function renderState(state) {
   if (document.activeElement !== $('address')) $('address').value = state.url;
   $('plugin-count').textContent = `${state.plugins.length} / 16`;
@@ -13,9 +28,11 @@ function renderState(state) {
   if (!state.plugins.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'まだエフェクトがありません。\nお気に入りのVST3を追加しましょう。'; $('plugins').append(empty); }
   for (const plugin of state.plugins) {
     const el = document.createElement('div'); el.className = `plugin ${plugin.bypass ? 'bypassed' : ''}`;
-    const title = document.createElement('strong'); title.textContent = plugin.name;
+    const title = document.createElement('strong'); title.textContent = plugin.name; title.title = plugin.name;
     const actions = document.createElement('div'); actions.className = 'actions';
-    actions.append(button('編集', () => action('plugin-action', 'editor', plugin.id)), button(plugin.bypass ? '有効にする' : 'バイパス', () => action('plugin-action', 'bypass', plugin.id)), button('削除', () => action('plugin-action', 'remove', plugin.id)));
+    const power = iconButton('power', plugin.bypass ? 'エフェクトを有効にする' : 'エフェクトをバイパス', () => action('plugin-action', 'bypass', plugin.id));
+    power.setAttribute('aria-pressed', String(!plugin.bypass));
+    actions.append(power, iconButton('pen', 'エフェクトを編集', () => action('plugin-action', 'editor', plugin.id)), iconButton('trash', 'エフェクトを削除', () => action('plugin-action', 'remove', plugin.id)));
     el.append(title, actions); $('plugins').append(el);
   }
 }
@@ -97,23 +114,72 @@ $('picker-close').onclick = closePicker;
 $('plugin-picker').addEventListener('cancel', event => { event.preventDefault(); void closePicker(); });
 $('plugin-search').oninput = () => { if (!scanning) renderCatalog(); };
 $('plugin-rescan').onclick = () => scanCatalog(true);
-function renderPresets(items) {
-  const selected = $('preset-list').value; $('preset-list').replaceChildren();
-  for (const item of items) { const option = document.createElement('option'); option.value = item.id; option.textContent = item.name; $('preset-list').append(option); }
-  if (items.some(p => p.id === selected)) $('preset-list').value = selected;
-  $('preset-load').disabled = $('preset-delete').disabled = !items.length;
+let presetItems = [], selectedPreset = null, presetBusy = false, filterPresets = false;
+function showPresetMenu(open) {
+  $('preset-menu').hidden = !open;
+  $('preset-name').setAttribute('aria-expanded', String(open)); $('preset-toggle').setAttribute('aria-expanded', String(open));
 }
-async function presetAction(name, value) {
-  const controls = ['preset-save', 'preset-load', 'preset-delete', 'plugin-add'];
-  controls.forEach(id => $(id).disabled = true);
-  try { await invoke(name, value); renderPresets(await invoke('presets')); toast(name === 'preset-load' ? 'チェーンを読み込みました' : name === 'preset-save' ? 'プリセットを保存しました' : 'プリセットを削除しました'); }
-  catch (error) { toast(error.message); }
-  finally { controls.forEach(id => $(id).disabled = false); const items = await action('presets'); if (items) renderPresets(items); }
+function renderPresets(items = presetItems) {
+  presetItems = items;
+  $('preset-menu').replaceChildren();
+  const query = filterPresets ? $('preset-name').value.toLowerCase().trim() : '';
+  const matches = items.filter(p => p.name.toLowerCase().includes(query));
+  for (const item of matches) {
+    const row = document.createElement('div'); row.className = 'preset-option';
+    const choose = button(item.name, () => presetAction('load', item)); choose.className = 'preset-choose'; choose.title = item.name;
+    choose.setAttribute('aria-current', String(item.id === selectedPreset));
+    const remove = iconButton('close', item.name + ' を削除', () => presetAction('delete', item));
+    choose.disabled = remove.disabled = presetBusy;
+    row.append(choose, remove); $('preset-menu').append(row);
+  }
+  if (!matches.length) { const empty = document.createElement('p'); empty.className = 'preset-empty'; empty.textContent = query ? '新しい名前で保存できます' : '保存済みプリセットはありません'; $('preset-menu').append(empty); }
 }
-$('preset-list').onchange = () => { $('preset-name').value = $('preset-list').selectedOptions[0]?.textContent || ''; };
-$('preset-save').onclick = () => presetAction('preset-save', $('preset-name').value);
-$('preset-load').onclick = () => presetAction('preset-load', $('preset-list').value);
-$('preset-delete').onclick = () => presetAction('preset-delete', $('preset-list').value);
+async function presetAction(operation, item) {
+  if (presetBusy) return;
+  const name = $('preset-name').value.trim();
+  if (operation === 'save' && !name) { toast('プリセット名を入力してください'); $('preset-name').focus(); return; }
+  presetBusy = true;
+  const controls = ['preset-name', 'preset-save', 'preset-toggle', 'plugin-add'];
+  controls.forEach(id => $(id).disabled = true); renderPresets();
+  try {
+    if (operation === 'load') {
+      await invoke('preset-load', item.id); selectedPreset = item.id; $('preset-name').value = item.name;
+      filterPresets = false; showPresetMenu(false);
+    } else if (operation === 'save') {
+      const items = await invoke('preset-save', name, selectedPreset ? { mode: 'update', id: selectedPreset } : { mode: 'create' });
+      selectedPreset = items.at(-1).id; filterPresets = false; showPresetMenu(false);
+    } else {
+      await invoke('preset-delete', item.id);
+      if (selectedPreset === item.id) { selectedPreset = null; $('preset-name').value = ''; }
+    }
+    toast(operation === 'load' ? 'チェーンを読み込みました' : operation === 'save' ? 'プリセットを保存しました' : 'プリセットを削除しました');
+  } catch (error) { toast(error.message); }
+  finally {
+    presetBusy = false; controls.forEach(id => $(id).disabled = false);
+    const items = await action('presets'); if (items) renderPresets(items);
+    if (operation !== 'delete') $('preset-name').focus();
+  }
+}
+setIcon($('preset-save'), 'save', 'プリセットを保存');
+$('preset-save').onclick = () => presetAction('save');
+$('preset-toggle').onclick = () => { filterPresets = false; renderPresets(); showPresetMenu($('preset-menu').hidden); };
+$('preset-name').onclick = () => { renderPresets(); showPresetMenu(true); };
+$('preset-name').oninput = () => { selectedPreset = null; filterPresets = true; renderPresets(); showPresetMenu(true); };
+$('preset-name').onkeydown = event => {
+  if (event.isComposing) return;
+  if (event.key === 'ArrowDown') { event.preventDefault(); renderPresets(); showPresetMenu(true); $('preset-menu').querySelector('.preset-choose')?.focus(); }
+  if (event.key === 'Escape') showPresetMenu(false);
+  if (event.key === 'Enter') { event.preventDefault(); void presetAction('save'); }
+};
+$('preset-menu').onkeydown = event => {
+  if (event.key === 'Escape') { showPresetMenu(false); $('preset-name').focus(); }
+  if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+    event.preventDefault(); const choices = [...$('preset-menu').querySelectorAll('.preset-choose')];
+    const index = choices.indexOf(document.activeElement); choices[(index + (event.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length]?.focus();
+  }
+};
+document.addEventListener('pointerdown', event => { if (!event.target.closest('.presets')) showPresetMenu(false); });
+document.addEventListener('focusin', event => { if (!event.target.closest('.presets')) showPresetMenu(false); });
 function renderExtensions(info) {
   $('extensions-path').textContent = info.directory; $('extensions-list').replaceChildren();
   for (const item of info.entries) {
