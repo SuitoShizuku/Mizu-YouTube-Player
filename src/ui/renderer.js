@@ -47,6 +47,7 @@ $('settings-button').onclick = async () => {
   $('settings').hidden = !open;
   $('settings-button').setAttribute('aria-pressed', String(open));
   await action('settings-open', open);
+  if (open) { const info = await action('extensions-info'); if (info) renderExtensions(info); }
 };
 let catalogData, scanning = false;
 function renderCatalog() {
@@ -96,7 +97,39 @@ $('picker-close').onclick = closePicker;
 $('plugin-picker').addEventListener('cancel', event => { event.preventDefault(); void closePicker(); });
 $('plugin-search').oninput = () => { if (!scanning) renderCatalog(); };
 $('plugin-rescan').onclick = () => scanCatalog(true);
-$('extension-select').onclick = () => action('extension-select');
+function renderPresets(items) {
+  const selected = $('preset-list').value; $('preset-list').replaceChildren();
+  for (const item of items) { const option = document.createElement('option'); option.value = item.id; option.textContent = item.name; $('preset-list').append(option); }
+  if (items.some(p => p.id === selected)) $('preset-list').value = selected;
+  $('preset-load').disabled = $('preset-delete').disabled = !items.length;
+}
+async function presetAction(name, value) {
+  const controls = ['preset-save', 'preset-load', 'preset-delete', 'plugin-add'];
+  controls.forEach(id => $(id).disabled = true);
+  try { await invoke(name, value); renderPresets(await invoke('presets')); toast(name === 'preset-load' ? 'チェーンを読み込みました' : name === 'preset-save' ? 'プリセットを保存しました' : 'プリセットを削除しました'); }
+  catch (error) { toast(error.message); }
+  finally { controls.forEach(id => $(id).disabled = false); const items = await action('presets'); if (items) renderPresets(items); }
+}
+$('preset-list').onchange = () => { $('preset-name').value = $('preset-list').selectedOptions[0]?.textContent || ''; };
+$('preset-save').onclick = () => presetAction('preset-save', $('preset-name').value);
+$('preset-load').onclick = () => presetAction('preset-load', $('preset-list').value);
+$('preset-delete').onclick = () => presetAction('preset-delete', $('preset-list').value);
+function renderExtensions(info) {
+  $('extensions-path').textContent = info.directory; $('extensions-list').replaceChildren();
+  for (const item of info.entries) {
+    const row = document.createElement('div'); row.className = 'extension-entry';
+    const label = document.createElement('p'); label.textContent = item.name + (item.loaded ? ' · ' + item.version : ' · 読み込み失敗: ' + item.error); row.append(label);
+    if (item.loaded && item.options) row.append(button('拡張機能の設定', () => action('extension-options', item.id)));
+    $('extensions-list').append(row);
+  }
+}
+$('extensions-folder').onclick = () => action('extensions-folder');
+$('extensions-scan').onclick = async () => {
+  $('extensions-scan').disabled = true;
+  try { renderExtensions(await invoke('extensions-scan')); } catch (error) { toast(error.message); }
+  finally { $('extensions-scan').disabled = false; }
+};
+(async () => { const items = await action('presets'); if (items) renderPresets(items); const info = await action('extensions-info'); if (info) renderExtensions(info); })();
 $('rule-add').onclick = () => { if ($('rules').children.length < 50) addRule(); else toast('転送先は50件までです'); };
 $('save').onclick = async () => {
   const rules = [...document.querySelectorAll('.rule')].map(el => ({ categoryId: el.querySelector('.category').value, url: el.querySelector('.webhook').value.trim(), format: el.querySelector('.format').value }));

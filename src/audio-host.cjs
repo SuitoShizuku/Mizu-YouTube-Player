@@ -13,10 +13,11 @@ class AudioHost extends EventEmitter {
     child.stdin.on('error', () => { if (this.process === child) this.fail('VSTホストとの接続が切れました'); });
     child.stdin.on('drain', () => { if (this.process === child) { this.blocked = false; this.flushCommands(); } });
     let pending = '';
+    this.process.stdout.setEncoding('utf8');
     this.process.stdout.on('data', chunk => {
       if (this.process !== child) return;
       pending += chunk.toString();
-      if (pending.length > 1000000) { this.stop(); return; }
+      if (pending.length > 64 * 1024 * 1024) { this.stop(); return; }
       let index;
       while ((index = pending.indexOf('\n')) >= 0) {
         const line = pending.slice(0, index); pending = pending.slice(index + 1);

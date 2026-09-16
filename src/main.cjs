@@ -1,7 +1,9 @@
-const { app, BrowserWindow, WebContentsView, webContents, ipcMain, session, clipboard, dialog, safeStorage, protocol } = require('electron');
+const { app, BrowserWindow, WebContentsView, webContents, ipcMain, session, clipboard, dialog, safeStorage, protocol, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
+const { Chains } = require('./chains.cjs');
+const { ExtensionFolder } = require('./extensions.cjs');
 const { SettingsStore } = require('./settings.cjs');
 const { PluginCatalog } = require('./plugin-catalog.cjs');
 const catalog = new PluginCatalog();
@@ -13,6 +15,7 @@ const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { CATEGORY_LIST, VARIABLES, shortUrl, videoId, playbackUrl, isYouTube } = require('./core.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'mizu-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 app.setName('Mizu YouTube Player');
+let chains, extensionFolder, autoSaveTimer, closing = false, closeAllowed = false;
 let win, view, store, host, forwarder, extensions, login, settingsOpen = false, pickerOpen = false;
 let status = { audio: 'VSTホストを起動中', extension: 'uBlock Origin 未導入', plugins: [], loadingPlugin: '', url: 'https://www.youtube.com/' };
 const shellUrl = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
@@ -34,24 +37,28 @@ async function inject() {
     view.webContents.send('normalization', store.value.normalizationOff);
   } catch { note('YouTubeの音声接続に失敗しました。ページを再読み込みしてください'); }
 }
-async function loadExtension(directory) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
-  if (!String(manifest.name).toLowerCase().includes('ublock')) throw Error('uBlock Originの展開フォルダーを選択してください');
-  const extension = await view.webContents.session.extensions.loadExtension(directory, { allowFileAccess: false });
-  status.extension = `${extension.name} 読込済み · 互換性未保証`;
-  publish();
+function extensionLoaded(extension) {
+  if (!extension.name.toLowerCase().includes('ublock')) return;
+  status.extension = extension.name + ' 読込済み';
   let attempts = 0;
   const probe = setInterval(async () => {
     if (!win || win.isDestroyed() || ++attempts > 20) { clearInterval(probe); return; }
-    const background = webContents.getAllWebContents().find(wc => wc.getURL() === `chrome-extension://${extension.id}/background.html`);
+    const background = webContents.getAllWebContents().find(wc => wc.getURL() === 'chrome-extension://' + extension.id + '/background.html');
     if (!background) return;
-    try {
-      if (await background.executeJavaScript('Boolean(globalThis.µBlock?.readyToFilter)')) {
-        status.extension = `${extension.name} · フィルター準備完了`; publish(); clearInterval(probe);
-      }
-    } catch { /* Background page may restart during extension initialization. */ }
-  }, 1000);
-  probe.unref();
+    try { if (await background.executeJavaScript('Boolean(globalThis.µBlock?.readyToFilter)')) { status.extension = extension.name + ' · フィルター準備完了'; publish(); clearInterval(probe); } } catch {}
+  }, 1000); probe.unref();
+}
+function openExtensionPage(url) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'chrome-extension:' || !view.webContents.session.extensions.getExtension(parsed.hostname)) throw Error('拡張機能のページが見つかりません');
+  const page = new BrowserWindow({ parent: win, width: 1000, height: 760, webPreferences: { session: view.webContents.session, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const allowed = target => { try { const next = new URL(target); return next.protocol === 'chrome-extension:' && next.hostname === parsed.hostname; } catch { return false; } };
+  page.webContents.on('will-navigate', (event, target) => { if (!allowed(target)) event.preventDefault(); });
+  page.webContents.on('will-redirect', (event, target) => { if (!allowed(target)) event.preventDefault(); });
+  page.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  extensions.addTab(page.webContents, page);
+  page.loadURL(url).catch(error => note(error.message));
+  return [page.webContents, page];
 }
 async function createWindow() {
   store = new SettingsStore(app.getPath('userData'), safeStorage);
@@ -63,6 +70,7 @@ async function createWindow() {
   const playerSession = session.fromPartition('persist:mizu-youtube');
   extensions = new ElectronChromeExtensions({ session: playerSession, license: 'GPL-3.0',
     createTab: async details => {
+      if ((details.url || '').startsWith('chrome-extension://')) return openExtensionPage(details.url);
       if (!allowedNavigation(details.url || '')) throw Error('拡張機能による外部ページ表示は許可されていません');
       await view.webContents.loadURL(details.url);
       return [view.webContents, win];
@@ -95,6 +103,15 @@ async function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.on('resize', bounds);
+  win.on('close', event => {
+    if (closeAllowed) return;
+    event.preventDefault();
+    if (closing) return;
+    closing = true; clearInterval(autoSaveTimer);
+    (chains ? chains.capture() : Promise.resolve()).catch(error => {
+      dialog.showErrorBox('エフェクトの保存に失敗しました', error.message + '\n前回保存したチェーンは維持されています。');
+    }).finally(() => { closeAllowed = true; win.close(); });
+  });
   win.on('closed', () => { login?.close(); forwarder.cancel(); host.removeAllListeners(); host.stop(); view.webContents?.close(); win = null; });
   login = new LoginWindow({ BrowserWindow, parent: win, session: playerSession, extensions, notify: note,
     diagnostic: entry => {
@@ -116,6 +133,17 @@ async function createWindow() {
   forwarder = new Forwarder(() => store.value, note);
   const exe = app.isPackaged ? path.join(process.resourcesPath, 'MizuAudioHost.exe') : path.join(__dirname, '../native/build/MizuAudioHost_artefacts/Release/MizuAudioHost.exe');
   host = new AudioHost(exe);
+  try { chains = new Chains(app.getPath('userData'), host); }
+  catch (error) { loadError = 'エフェクトの保存データを読めませんでした: ' + error.message; }
+  const requireChains = () => { if (closing) throw Error('終了処理中です'); if (!chains) throw Error('保存データを読み込めないためプリセット操作を停止しています'); return chains; };
+  handle('presets', () => requireChains().list());
+  handle('preset-save', name => requireChains().save(name));
+  handle('preset-load', id => requireChains().load(id));
+  handle('preset-delete', id => requireChains().remove(id));
+  handle('extensions-info', () => extensionFolder.info());
+  handle('extensions-scan', async () => { const result = await extensionFolder.scan(); view.webContents.reload(); return result; });
+  handle('extensions-folder', async () => { const error = await shell.openPath(extensionFolder.directory); if (error) throw Error(error); });
+  handle('extension-options', id => { openExtensionPage(extensionFolder.optionsUrl(id)); });
   host.on('status', message => { status.audio = message; status.plugins = host.plugins; status.loadingPlugin = ''; view.webContents.setAudioMuted(true); publish(); note(message); });
   host.on('event', event => {
     if (event.type === 'ready') status.audio = 'ホスト接続済み · 48 kHz / Stereo';
@@ -138,19 +166,20 @@ async function createWindow() {
   handle('copy', () => { const url = shortUrl(view.webContents.getURL()); if (!url) throw Error('動画ページを開いてください'); clipboard.writeText(url); return url; });
   handle('settings-open', open => { settingsOpen = !!open; bounds(); });
   handle('settings-save', settings => { const value = store.save(settings); forwarder.cancel(); view.webContents.send('normalization', value.normalizationOff); return value; });
-  handle('extension-select', async () => {
-    const result = await dialog.showOpenDialog(win, { title: 'uBlock Originのmanifest.jsonがあるフォルダー', properties: ['openDirectory'] });
-    if (!result.canceled) { await loadExtension(result.filePaths[0]); fs.writeFileSync(path.join(app.getPath('userData'), 'extension-path.json'), JSON.stringify(result.filePaths[0])); }
-  });
   handle('plugin-catalog', refresh => catalog.scan(refresh === true));
   handle('plugin-picker-open', open => { pickerOpen = !!open; bounds(); });
   handle('plugin-add', async id => {
     const selected = catalog.resolve(id);
     await host.ensureReady();
+    if (closing) throw Error('終了処理中です');
+    if (chains) { await chains.queue; chains.protectLast = false; }
     host.command(2, selected);
   });
-  handle('plugin-action', (action, id) => {
+  handle('plugin-action', async (action, id) => {
+    if (closing) throw Error('終了処理中です');
+    if (chains) await chains.queue;
     if (!['editor', 'remove', 'bypass'].includes(action) || !Number.isInteger(id) || !status.plugins.some(p => p.id === id)) throw Error('プラグイン操作が不正です');
+    if (chains && action !== 'editor') chains.protectLast = false;
     host.command({ editor: 3, remove: 4, bypass: 5 }[action], String(id));
   });
   ipcMain.on('audio', (event, buffer) => { if (playerEvent(event)) host.audio(buffer); });
@@ -173,15 +202,21 @@ async function createWindow() {
       catch (error) { note(error.message); }
     }
   });
+  const bundled = path.join(app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'), 'extensions/ublock');
+  extensionFolder = new ExtensionFolder(path.join(app.getPath('userData'), 'Extensions'), playerSession, bundled, extensionLoaded);
   await win.loadFile(path.join(__dirname, 'ui/index.html'));
   bounds();
-  host.start();
-  const bundled = path.join(app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'), 'extensions/ublock');
-  try {
-    const savedPath = path.join(app.getPath('userData'), 'extension-path.json');
-    if (fs.existsSync(path.join(bundled, 'manifest.json'))) await loadExtension(bundled);
-    else if (fs.existsSync(savedPath)) await loadExtension(JSON.parse(fs.readFileSync(savedPath, 'utf8')));
-  } catch { status.extension = 'uBlock Origin 読込失敗 · 設定で再選択'; publish(); }
+  await host.ensureReady();
+  if (chains) {
+    try { await chains.restore(chains.data.last); } catch (error) { note(error.message); }
+    let saving = false;
+    autoSaveTimer = setInterval(async () => {
+      if (saving || closing) return;
+      saving = true;
+      try { await chains.capture(); } catch (error) { note(error.message); } finally { saving = false; }
+    }, 10000);
+  }
+  await extensionFolder.scan();
   if (loadError) note(loadError);
   await view.webContents.loadURL('https://www.youtube.com/').catch(error => { if (error.code !== 'ERR_ABORTED' && error.errno !== -3) note(`YouTubeを読み込めませんでした: ${error.code || '通信エラー'}`); });
 }

@@ -28,6 +28,7 @@ public:
 };
 struct Slot {
     int id; bool bypass = false;
+    juce::String path;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::unique_ptr<EditorWindow> editor;
 };
@@ -161,21 +162,41 @@ public:
             return;
         }
         if (type == 6) { devices.closeAudioDevice(); followDefaultOutput(); return; }
-        if (type == 2) {
+        if (type == 7) {
+            juce::Array<juce::var> slots;
+            for (const auto& slot : chain) {
+                juce::MemoryBlock state;
+                { const juce::ScopedLock lock(chainLock); slot->plugin->getStateInformation(state); }
+                auto* entry = new juce::DynamicObject();
+                entry->setProperty("path", slot->path); entry->setProperty("bypass", slot->bypass);
+                entry->setProperty("state", state.toBase64Encoding()); slots.add(juce::var(entry));
+            }
+            auto* event = new juce::DynamicObject(); event->setProperty("type", "snapshot");
+            event->setProperty("request", payload); event->setProperty("chain", slots); emit(juce::var(event)); return;
+        }
+        if (type == 9) {
+            std::vector<std::unique_ptr<Slot>> removed;
+            { const juce::ScopedLock lock(chainLock); removed.swap(chain); }
+            for (auto& slot : removed) { slot->editor.reset(); slot->plugin->releaseResources(); }
+            list(); return;
+        }
+        if (type == 2 || type == 8) {
+            const auto saved = type == 8 ? juce::JSON::parse(payload) : juce::var();
+            const auto pluginPath = type == 8 ? saved["path"].toString() : payload;
             if (chain.size() >= 16) { message("error", "Maximum 16 plugins"); return; }
             loadingPlugin = true;
-            message("plugin-loading", juce::File(payload).getFileNameWithoutExtension());
+            message("plugin-loading", juce::File(pluginPath).getFileNameWithoutExtension());
             // Scanning a module again while its previous instance is processing
             // can re-enter vendor initialization. Cache its descriptor instead.
-            if (descriptionsByPath.find(payload) == descriptionsByPath.end()) {
+            if (descriptionsByPath.find(pluginPath) == descriptionsByPath.end()) {
                 juce::OwnedArray<juce::PluginDescription> descriptions;
-                formats.getFormat(0)->findAllTypesForFile(descriptions, payload);
+                formats.getFormat(0)->findAllTypesForFile(descriptions, pluginPath);
                 if (descriptions.isEmpty()) { message("error", "No VST3 plugin found"); finishPluginLoad(); return; }
-                descriptionsByPath.emplace(payload, *descriptions[0]);
+                descriptionsByPath.emplace(pluginPath, *descriptions[0]);
             }
             const std::weak_ptr<int> alive = lifetime;
-            formats.createPluginInstanceAsync(descriptionsByPath.at(payload), 48000, blockSize,
-                [this, alive](std::unique_ptr<juce::AudioPluginInstance> plugin, const juce::String& error) {
+            formats.createPluginInstanceAsync(descriptionsByPath.at(pluginPath), 48000, blockSize,
+                [this, alive, pluginPath, saved](std::unique_ptr<juce::AudioPluginInstance> plugin, const juce::String& error) {
                     if (alive.expired()) return;
                     if (!plugin) { message("error", error); finishPluginLoad(); return; }
                     plugin->disableNonMainBuses();
@@ -184,7 +205,13 @@ public:
                     layout.inputBuses.set(0, juce::AudioChannelSet::stereo()); layout.outputBuses.set(0, juce::AudioChannelSet::stereo());
                     if (!plugin->setBusesLayout(layout)) { message("error", "Plugin does not support stereo input/output"); finishPluginLoad(); return; }
                     plugin->setRateAndBufferSizeDetails(48000, blockSize); plugin->prepareToPlay(48000, blockSize);
+                    if (saved.isObject()) {
+                        juce::MemoryBlock state;
+                        if (!state.fromBase64Encoding(saved["state"].toString())) { message("error", "Invalid saved plugin state"); finishPluginLoad(); return; }
+                        plugin->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+                    }
                     auto slot = std::make_unique<Slot>(); slot->id = nextId++; slot->plugin = std::move(plugin);
+                    slot->path = pluginPath; slot->bypass = saved.isObject() && static_cast<bool>(saved["bypass"]);
                     { const juce::ScopedLock lock(chainLock); chain.push_back(std::move(slot)); }
                     list(); finishPluginLoad();
                 });
@@ -263,11 +290,11 @@ int main(int argc, char* argv[]) {
         while (true) {
             uint32_t header[2];
             if (std::fread(header, sizeof(header), 1, stdin) != 1) break;
-            if (header[1] > 65536) break;
+            if (header[1] > 64 * 1024 * 1024) break;
             std::vector<char> payload(header[1]);
             if (header[1] && std::fread(payload.data(), 1, payload.size(), stdin) != payload.size()) break;
             if (header[0] == 1) host.push(payload);
-            else if (header[0] >= 2 && header[0] <= 6) {
+            else if (header[0] >= 2 && header[0] <= 9) {
                 const auto text = juce::String::fromUTF8(payload.data(), static_cast<int>(payload.size()));
                 juce::MessageManager::callAsync([&host, type = header[0], text] { host.command(type, text); });
             }

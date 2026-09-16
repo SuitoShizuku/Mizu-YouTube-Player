@@ -42,6 +42,15 @@ child.stderr.on('data', async chunk => {
     })()`);
     if (!picker.count || !picker.visible || !picker.settingsVisible || !picker.returned) throw Error('Packaged picker/settings toggle failed');
     console.log('PACKAGED_PICKER', JSON.stringify(picker));
+    const persistence = await evaluate(shell.webSocketDebuggerUrl, `(async () => {
+      const saved = await window.mizu.invoke('preset-save', 'Package smoke');
+      await window.mizu.invoke('preset-load', saved[0].id);
+      await window.mizu.invoke('preset-delete', saved[0].id);
+      const extensions = await window.mizu.invoke('extensions-info');
+      return { saved: saved.length, extensions: extensions.entries.filter(e => e.loaded).length, directory: extensions.directory };
+    })()`);
+    if (persistence.saved !== 1 || !persistence.extensions) throw Error('Packaged presets/extensions failed');
+    console.log('PACKAGED_PERSISTENCE', JSON.stringify(persistence));
     if (process.argv.includes('--login')) {
       const player = targets.find(target => target.url.startsWith('https://www.youtube.com/'));
       if (!player) throw Error('YouTube target missing');
