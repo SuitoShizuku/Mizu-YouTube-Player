@@ -73,6 +73,17 @@ child.stderr.on('data', async chunk => {
       if (!visible) throw Error('Packaged Google sign-in form did not open');
       console.log('PACKAGED_LOGIN', 'Google email form displayed in dedicated window');
     }
+    const browsing = await evaluate(shell.webSocketDebuggerUrl, `(async () => {
+      const loading = document.querySelector('.player-placeholder').textContent;
+      await window.mizu.invoke('navigate', 'example.com');
+      const url = await window.mizu.invoke('copy');
+      return { loading, url };
+    })()`);
+    if (browsing.loading !== '読み込んでいます...' || new URL(browsing.url).hostname !== 'example.com') throw Error('Packaged browsing/loading update missing');
+    console.log('PACKAGED_BROWSING', JSON.stringify(browsing));
+    const audio = await evaluate(shell.webSocketDebuggerUrl, 'window.mizuAudio.start()');
+    if (!audio.active || audio.sampleRate !== 48000) throw Error('Packaged external tab audio capture failed');
+    console.log('PACKAGED_TAB_AUDIO', JSON.stringify(audio));
     fs.writeFileSync('.local/package-smoke.json', JSON.stringify(state, null, 2));
     clearTimeout(deadline);
     child.kill();

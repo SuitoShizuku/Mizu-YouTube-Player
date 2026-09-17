@@ -19,10 +19,7 @@ if (process.isMainFrame) {
   window.addEventListener('message', event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.source !== 'mizu-player') return;
     const { type, value } = event.data;
-    if (type === 'audio' && value instanceof ArrayBuffer && value.byteLength === 8192) ipcRenderer.send('audio', value);
     if (type === 'playing' && typeof value?.videoId === 'string' && typeof value?.fullUrl === 'string') ipcRenderer.send('player-playing', value);
-    if (type === 'connected') ipcRenderer.send('audio-connected');
-    if (type === 'status' && typeof value === 'string') ipcRenderer.send('player-status', value);
     if (type === 'toggle-normalization') ipcRenderer.send('normalization-toggle');
   });
   ipcRenderer.on('normalization', (_event, enabled) => window.postMessage({ source: 'mizu-settings', normalizationOff: !!enabled }, location.origin));

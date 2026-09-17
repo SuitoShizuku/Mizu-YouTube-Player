@@ -1,6 +1,6 @@
 # Mizu YouTube Player
 
-Windows 11向けのElectronプレイヤー。YouTubeの音声をアプリ内のJUCE製VST3ホストへ送り、Windowsの既定オーディオデバイスから出力します。外部仮想マイク／仮想ケーブルは使いません。
+Windows 11向けのElectronプレイヤー。YouTubeや外部サイトのタブ音声をアプリ内のJUCE製VST3ホストへ送り、Windowsの既定オーディオデバイスから出力します。外部仮想マイク／仮想ケーブルは使いません。
 
 ## 起動
 
@@ -26,9 +26,13 @@ npm start
 npm run dist
 ```
 
-出力先は `dist/Mizu YouTube Player 0.1.4.exe`。ビルド時にVSTホストと展開済みuBlock Originを同梱します。コード署名は未設定です。
+出力先は `dist/Mizu YouTube Player 1.0.0.exe`。ビルド時にVSTホストと展開済みuBlock Originを同梱します。コード署名は未設定です。
 
 ## 操作
+
+- 読み込み待ちの表示は「読み込んでいます...」のみです。装飾用のキャッチコピーを削除しました。
+- アドレス欄から任意のHTTP/HTTPSサイトを閲覧できます。スキーム省略時はHTTPSを補い、リンクやリダイレクトも通常のWebサイト間で許可します。YouTube以外では現在のURLをコピーします。Googleログイン専用ウィンドウの遷移制限は維持しています。
+- 外部サイトの音声も同じVSTチェーンを経由します。サイト別の音声設定は不要です。Webhook転送と音量補正ボタンはYouTube専用です。
 
 - YouTubeを通常どおり操作します。ログイン用ページへの遷移と永続セッションに対応しています。Google側が組み込みブラウザーのログインを拒否する場合があります。アカウントでのログイン完了は未検証です。
 - アドレスバー右の「URLをコピー」で `https://youtu.be/動画ID` をコピーします。`si`、`t`、`list`などを取り除きます。
@@ -59,14 +63,19 @@ npm run dist
 ## 音声処理
 
 ```text
-YouTube HTMLMediaElement
-  → MediaElementAudioSourceNode
+Player WebContents (HTML media / Web Audio / iframe)
+  → Electron tab audio capture (pre-mute, local echo disabled)
+  → trusted shell MediaStreamAudioSourceNode
   → AudioWorklet (48 kHz / stereo / Float32)
-  → sandboxed preload → Electron main → child-process stdin
+  → shell preload → Electron main → child-process stdin
   → JUCE FIFO → VST3 chain → default Windows output
 ```
 
 Chromiumの音声出力は常時ミュート。Workletもブラウザー出力をゼロにし、ネイティブホストだけが音を出します。ホストが利用できないときは未処理音への切り替えをせず無音になります。ホストはElectronと別プロセスのため、プラグインのクラッシュを検出できます。停止したホストは次のプラグイン追加時に再起動します（クラッシュしたチェーンは復元しません）。
+
+音声はページのDOMではなくプレイヤータブ全体から取得します。信頼済みのローカル画面からの要求にだけ、そのタブのキャプチャを許可します。マイクや他アプリの音は取得しません。API上必要な映像トラックは取得直後に停止し、表示・録画しません。ステレオとプレイヤー音量を維持し、自動音量調整・ノイズ抑制・エコー除去を無効にします。3秒ごとに接続を確認し、切断時は再接続します。DRM保護された配信の再生・音声取得は未検証です。
+
+参考: https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts
 
 - Windows x64 / ステレオVST3エフェクトが対象です。VST処理は48 kHzで行い、出力先のサンプルレートへ変換します。
 - Windowsの既定出力を750 ms間隔で確認し、変更・切断・再接続時にはVSTチェーンを保持して出力を再開します。44.1/48/96 kHzの出力変換をオフラインテスト済みです。
@@ -122,7 +131,7 @@ native/build/MizuAudioHost_artefacts/Release/MizuAudioHost.exe --test-resampling
 
 - ユニットテスト: URL検証、変数展開、ジャンル別ルーティング、重複排除、古い取得の破棄、429、Discord文字数制限。
 - Electronスモーク: YouTube表示、uBlock初期化と広告リクエスト遮断、設定フォーム・カテゴリ一覧・暗号化保存。
-- 音声スモーク: Chromiumをミュートした状態で実際の音声ルーティングスクリプトから非ゼロPCMが取れること、動画音量50%が反映されること。テスト音はスピーカーに出しません。
+- 音声スモーク: ミュートしたプレイヤータブから、CORSヘッダーのない別オリジン音源、Web Audio、別オリジンiframeの非ゼロPCMを取得します。音量50%の反映とHTTPS外部サイトへの移動後の継続も検証します。実VSTを読み込み、テスト音はスピーカーに出しません。
 - ネイティブスモーク: 実機出力デバイス起動、実際のVST3読み込み・バイパス・削除。無音バッファを使います。
 
 ## 0.1.1の修正
@@ -153,7 +162,7 @@ native/build/MizuAudioHost_artefacts/Release/MizuAudioHost.exe --test-resampling
 - 設定ボタンは設定／プレイヤーを切り替えます。切り替えても未保存の入力は保持し、保存ボタンで確定します。
 - `src/plugin-catalog.cjs` がファイル探索と選択IDの管理を担当します。
 
-`src/main.cjs`: Electron・IPC・拡張機能・ウィンドウ。`src/core.cjs`: URL／変数／入力検証。`src/forwarder.cjs`: YouTube API／Discord。`src/youtube-page.js`: 音声接続・音量補正・再生検出。`native/main.cpp`: VST3ホスト。`src/ui/`: 日本語の操作画面。
+`src/main.cjs`: Electron・IPC・拡張機能・ウィンドウ。`src/core.cjs`: URL／変数／入力検証。`src/forwarder.cjs`: YouTube API／Discord。`src/youtube-page.js`: YouTube音量補正・再生検出。`src/ui/tab-audio.js`: サイト共通のタブ音声取得。`native/main.cpp`: VST3ホスト。`src/ui/`: 日本語の操作画面。
 
 ## 依存ライセンス・参照
 

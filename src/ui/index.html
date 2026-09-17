@@ -10,13 +10,13 @@
     <div class="brand"><span class="drop">◒</span><div>Mizu<span>YOUTUBE PLAYER</span></div></div>
     <button id="back" class="icon" title="戻る" aria-label="戻る">←</button>
     <button id="reload" class="icon" title="再読み込み" aria-label="再読み込み">↻</button>
-    <form id="address-form"><span class="address-icon">↗</span><input id="address" type="url" aria-label="YouTube URL" value="https://www.youtube.com/" spellcheck="false"><button type="submit" class="go">開く</button></form>
-    <button id="copy" class="copy" title="余分なパラメータを除いたyoutu.beリンクをコピー">⧉ <span>URLをコピー</span></button>
+    <form id="address-form"><span class="address-icon">↗</span><input id="address" type="text" aria-label="URL" value="https://www.youtube.com/" spellcheck="false"><button type="submit" class="go">開く</button></form>
+    <button id="copy" class="copy" title="URLをコピー（YouTube動画は短縮リンク）">⧉ <span>URLをコピー</span></button>
     <button id="settings-button" class="icon" aria-label="設定" title="設定">⚙</button>
   </header>
-  <main><section class="player-placeholder"><span class="drop">◒</span><h1>音楽に、あなたの音を。</h1><p>YouTubeを読み込んでいます…</p></section>
+  <main><section class="player-placeholder"><p role="status">読み込んでいます...</p></section>
   <aside>
-    <div class="eyebrow">YOUR SOUND, YOUR SPACE</div><div class="rack-title"><h1>オーディオラック</h1><span class="pill">VST3</span></div>
+    <div class="rack-title"><h1>オーディオラック</h1><span class="pill">VST3</span></div>
     <div class="section-heading"><h2>エフェクト</h2><span id="plugin-count">0 / 16</span></div>
     <section class="presets" aria-label="チェーンプリセット">
       <div class="preset-combo"><input id="preset-name" role="combobox" aria-label="プリセット名・選択" aria-haspopup="dialog" aria-expanded="false" aria-controls="preset-menu" autocomplete="off" maxlength="80" placeholder="プリセット名／選択"><button id="preset-toggle" class="tool-icon" aria-label="プリセット一覧" title="プリセット一覧" aria-expanded="false">⌄</button><button id="preset-save" class="tool-icon" aria-label="プリセットを保存" title="名前を入力して新規保存／選択中のプリセットを更新"></button></div>
@@ -27,7 +27,7 @@
     <p class="muted small">Windows x64 / ステレオ VST3<br>上から順番に音声を処理します。</p>
   </aside></main>
   <section id="settings" hidden>
-    <div class="settings-heading"><div><div class="eyebrow">MAKE IT YOURS</div><h1>設定</h1></div></div>
+    <div class="settings-heading"><div><h1>設定</h1></div></div>
     <div class="settings-grid"><nav><a href="#forward-section">再生を転送</a><a href="#audio-section">音声</a><a href="#extension-section">拡張機能</a></nav>
     <div class="settings-content">
       <section class="card" id="forward-section"><div class="section-heading"><div><h2>再生を転送</h2><p class="muted">再生した動画を、ジャンルごとのDiscordへ。</p></div><label class="switch"><input id="forwarding" type="checkbox">有効</label></div>
@@ -41,7 +41,7 @@
       <div class="save-bar"><span id="save-status" role="status"></span><button id="save" class="primary">設定を保存</button></div>
     </div></div>
   </section>
-  <footer><span>◒ Mizu YouTube Player</span><span>v0.1.4</span></footer>
+  <footer><span>◒ Mizu YouTube Player</span><span>v1.0.0</span></footer>
   <dialog id="plugin-picker" aria-labelledby="picker-title">
     <div class="settings-heading"><h1 id="picker-title">プラグインを追加</h1><button id="picker-close" aria-label="一覧を閉じる">閉じる ×</button></div>
     <div class="catalog-toolbar"><input id="plugin-search" type="search" placeholder="名前・フォルダーで検索" aria-label="プラグインを検索"><button id="plugin-rescan">再スキャン</button></div>
@@ -50,5 +50,5 @@
     <details><summary>スキャン対象と対応形式</summary><p>Windows x64 / ステレオ VST3 に対応。VST2（.dll）は未対応です。DLLにはプラグイン以外のファイルも含まれます。</p><div id="catalog-roots"></div><p id="catalog-warnings"></p></details>
   </dialog>
   <div id="toast" role="status" hidden></div>
-  <script src="renderer.js"></script>
+  <script src="tab-audio.js"></script><script src="renderer.js"></script>
 </body></html>

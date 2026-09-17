@@ -12,7 +12,7 @@ if (label === 'timer-baseline') {
 }
 app.setPath('userData', path.resolve('.local/occlusion-' + label + '-' + Date.now()));
 let samples = [];
-ipcMain.on('audio', () => samples.push(performance.now()));
+ipcMain.on('routed-audio', () => samples.push(performance.now()));
 require('../src/main.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 app.whenReady().then(async () => {

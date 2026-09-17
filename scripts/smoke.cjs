@@ -10,7 +10,7 @@ dialog.showErrorBox = (title, message) => log('APP_ERROR', title, message);
 dialog.showOpenDialog = () => { throw Error('Unexpected native file dialog'); };
 app.on('will-quit', () => log('QUIT'));
 let audioPackets = 0;
-ipcMain.on('audio', (_event, data) => { if (data instanceof ArrayBuffer && data.byteLength === 8192) audioPackets++; });
+ipcMain.on('routed-audio', (_event, data) => { if (data instanceof ArrayBuffer && data.byteLength === 8192) audioPackets++; });
 app.on('browser-window-created', (_event, win) => {
   win.webContents.on('console-message', (_event, details) => { if (details.level >= 2) console.log('RENDERER:', details.message); });
 });

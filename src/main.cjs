@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, webContents, ipcMain, session, clipboard, dialog, safeStorage, protocol, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, webContents, ipcMain, session, clipboard, dialog, safeStorage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -10,14 +10,13 @@ const catalog = new PluginCatalog();
 const { AudioHost } = require('./audio-host.cjs');
 const { Forwarder } = require('./forwarder.cjs');
 const { LoginWindow } = require('./login.cjs');
-const { allowedNavigation, wasAborted } = require('./navigation.cjs');
+const { allowedWebNavigation, addressUrl, wasAborted } = require('./navigation.cjs');
 const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { CATEGORY_LIST, VARIABLES, shortUrl, videoId, playbackUrl, isYouTube } = require('./core.cjs');
 require('./realtime.cjs').configureRealtime(app);
-protocol.registerSchemesAsPrivileged([{ scheme: 'mizu-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 app.setName('Mizu YouTube Player');
 let chains, extensionFolder, autoSaveTimer, closing = false, closeAllowed = false;
-let realtimeTimer;
+let realtimeTimer, audioRouteTimer, lastRouteError;
 let win, view, store, host, forwarder, extensions, login, settingsOpen = false, pickerOpen = false;
 let status = { audio: 'VSTホストを起動中', extension: 'uBlock Origin 未導入', plugins: [], loadingPlugin: '', url: 'https://www.youtube.com/' };
 const shellUrl = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
@@ -40,12 +39,17 @@ function bounds() {
 function trusted(event) { return event.sender === win?.webContents && event.senderFrame?.url === shellUrl; }
 function playerEvent(event) { return event.sender === view?.webContents && event.senderFrame === view.webContents.mainFrame && isYouTube(event.senderFrame.url); }
 function handle(name, fn) { ipcMain.handle(name, (event, ...args) => { if (!trusted(event)) throw Error('許可されていない呼び出し'); return fn(...args); }); }
+async function startAudioCapture() {
+  if (closing || !win || win.isDestroyed() || !host?.ready || !allowedWebNavigation(view.webContents.getURL())) return;
+  try { await win.webContents.executeJavaScript('window.mizuAudio.start()', true); }
+  catch (error) { if (lastRouteError !== error.message) { lastRouteError = error.message; note('音声接続に失敗しました。再接続します: ' + error.message); } }
+}
 async function inject() {
   if (!isYouTube(view.webContents.getURL())) return;
   try {
     await view.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname, 'youtube-page.js'), 'utf8'));
     view.webContents.send('normalization', store.value.normalizationOff);
-  } catch { note('YouTubeの音声接続に失敗しました。ページを再読み込みしてください'); }
+  } catch { note('YouTubeのコントロールを読み込めませんでした'); }
 }
 function extensionLoaded(extension) {
   if (!extension.name.toLowerCase().includes('ublock')) return;
@@ -81,7 +85,7 @@ async function createWindow() {
   extensions = new ElectronChromeExtensions({ session: playerSession, license: 'GPL-3.0',
     createTab: async details => {
       if ((details.url || '').startsWith('chrome-extension://')) return openExtensionPage(details.url);
-      if (!allowedNavigation(details.url || '')) throw Error('拡張機能による外部ページ表示は許可されていません');
+      if (!allowedWebNavigation(details.url || '')) throw Error('HTTPまたはHTTPSのページを指定してください');
       await view.webContents.loadURL(details.url);
       return [view.webContents, win];
     },
@@ -91,16 +95,17 @@ async function createWindow() {
   });
   playerSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'fullscreen'));
   playerSession.setPermissionCheckHandler((_wc, permission) => permission === 'fullscreen');
-  playerSession.protocol.handle('mizu-audio', request => request.url === 'mizu-audio://host/worklet.js'
-    ? new Response(fs.readFileSync(path.join(__dirname, 'audio-worklet.js')), { headers: { 'Content-Type': 'application/javascript', 'Access-Control-Allow-Origin': '*' } })
-    : new Response('', { status: 404 }));
   view = new WebContentsView({ webPreferences: { session: playerSession, preload: path.join(__dirname, 'youtube-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
   win.contentView.addChildView(view);
   extensions.addTab(view.webContents, win);
-  view.webContents.setAudioMuted(true); // Silence until every media element is connected to the host.
-  view.webContents.on('will-navigate', (event, url) => { if (!allowedNavigation(url)) event.preventDefault(); });
-  view.webContents.on('will-redirect', (event, url, _inPlace, mainFrame) => { if (mainFrame !== false && !allowedNavigation(url)) event.preventDefault(); });
-  view.webContents.setWindowOpenHandler(({ url }) => { if (allowedNavigation(url)) view.webContents.loadURL(url).catch(() => note('ページを開けませんでした')); return { action: 'deny' }; });
+  view.webContents.setAudioMuted(true); // Captured PCM is pre-mute; raw browser output stays silent.
+  win.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+    if (closing || request.frame !== win.webContents.mainFrame || request.frame.url !== shellUrl || !request.audioRequested) { callback({}); return; }
+    callback({ video: view.webContents.mainFrame, audio: view.webContents.mainFrame, enableLocalEcho: false });
+  });
+  view.webContents.on('will-navigate', (event, url) => { if (!allowedWebNavigation(url)) event.preventDefault(); });
+  view.webContents.on('will-redirect', (event, url, _inPlace, mainFrame) => { if (mainFrame !== false && !allowedWebNavigation(url)) event.preventDefault(); });
+  view.webContents.setWindowOpenHandler(({ url }) => { if (allowedWebNavigation(url)) view.webContents.loadURL(url).catch(() => note('ページを開けませんでした')); return { action: 'deny' }; });
   view.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace) { view.webContents.setAudioMuted(true); forwarder.cancel(); } });
   const navigated = url => {
     if (videoId(status.url) !== videoId(url) || !videoId(url)) forwarder.navigate(url);
@@ -108,7 +113,7 @@ async function createWindow() {
   };
   view.webContents.on('did-navigate', (_event, url) => navigated(url));
   view.webContents.on('did-navigate-in-page', (_event, url, mainFrame) => { if (mainFrame) navigated(url); });
-  view.webContents.on('did-finish-load', inject);
+  view.webContents.on('did-finish-load', () => { void inject(); void startAudioCapture(); });
   view.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => { if (mainFrame && code !== -3) note(`ページ読み込み失敗 (${code})`); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
@@ -117,7 +122,7 @@ async function createWindow() {
     if (closeAllowed) return;
     event.preventDefault();
     if (closing) return;
-    closing = true; clearInterval(autoSaveTimer); clearInterval(realtimeTimer);
+    closing = true; clearInterval(autoSaveTimer); clearInterval(realtimeTimer); clearInterval(audioRouteTimer);
     (chains ? chains.capture() : Promise.resolve()).catch(error => {
       dialog.showErrorBox('エフェクトの保存に失敗しました', error.message + '\n前回保存したチェーンは維持されています。');
     }).finally(() => { closeAllowed = true; win.close(); });
@@ -166,15 +171,14 @@ async function createWindow() {
   });
   handle('initial', () => ({ settings: store.value, categories: CATEGORY_LIST, variables: VARIABLES, status }));
   handle('navigate', url => {
-    if (typeof url !== 'string' || url.length > 4000) throw Error('URLが不正です');
+    url = addressUrl(url);
     const id = videoId(url);
     if (new URL(url).hostname === 'youtu.be' && id) url = `https://www.youtube.com/watch?v=${id}`;
-    if (!allowedNavigation(url)) throw Error('YouTubeのHTTPS URLを入力してください');
     return view.webContents.loadURL(url);
   });
   handle('back', () => { if (view.webContents.navigationHistory.canGoBack()) view.webContents.navigationHistory.goBack(); });
   handle('reload', () => view.webContents.reload());
-  handle('copy', () => { const url = shortUrl(view.webContents.getURL()); if (!url) throw Error('動画ページを開いてください'); clipboard.writeText(url); return url; });
+  handle('copy', () => { const current = view.webContents.getURL(); const url = shortUrl(current) || (allowedWebNavigation(current) ? current : ''); if (!url) throw Error('ページを開いてください'); clipboard.writeText(url); return url; });
   handle('settings-open', open => { settingsOpen = !!open; bounds(); });
   handle('settings-save', settings => { const value = store.save(settings); forwarder.cancel(); view.webContents.send('normalization', value.normalizationOff); return value; });
   handle('plugin-catalog', refresh => catalog.scan(refresh === true));
@@ -193,7 +197,13 @@ async function createWindow() {
     if (chains && action !== 'editor') chains.protectLast = false;
     host.command({ editor: 3, remove: 4, bypass: 5 }[action], String(id));
   });
-  ipcMain.on('audio', (event, buffer) => { if (playerEvent(event)) host.audio(buffer); });
+  ipcMain.on('routed-audio', (event, buffer) => { if (trusted(event)) host.audio(buffer); });
+  ipcMain.on('audio-route-status', (event, connected, message) => {
+    if (!trusted(event) || typeof message !== 'string') return;
+    status.audio = connected ? 'タブ音声 → VST3 → 出力' : '音声接続を再試行中';
+    if (connected) lastRouteError = null;
+    publish();
+  });
   ipcMain.on('player-playing', (event, report) => {
     if (!playerEvent(event)) return;
     const url = playbackUrl(report);
@@ -203,10 +213,6 @@ async function createWindow() {
     if (!playerEvent(event)) return;
     login.open(typeof requestedUrl === 'string' && requestedUrl.length <= 12000 ? requestedUrl : undefined);
   });
-  ipcMain.on('player-status', (event, text) => { if (playerEvent(event) && host.ready && typeof text === 'string') { status.audio = text.slice(0, 180); publish(); } });
-  // Keep Chromium's output muted even after routing. The worklet still processes
-  // upstream samples, while newly inserted/unconnected media cannot bypass VST.
-  ipcMain.on('audio-connected', event => { if (playerEvent(event) && !host.ready) note('音声ルートは接続済みですが、VSTホストが停止しています'); });
   ipcMain.on('normalization-toggle', event => {
     if (playerEvent(event)) {
       try { store.save({ ...store.value, normalizationOff: !store.value.normalizationOff }); view.webContents.send('normalization', store.value.normalizationOff); }
@@ -228,6 +234,8 @@ async function createWindow() {
       try { await chains.capture(); } catch (error) { note(error.message); } finally { saving = false; }
     }, 10000);
   }
+  await startAudioCapture();
+  audioRouteTimer = setInterval(startAudioCapture, 3000);
   await extensionFolder.scan();
   if (loadError) note(loadError);
   await view.webContents.loadURL('https://www.youtube.com/').catch(error => { if (error.code !== 'ERR_ABORTED' && error.errno !== -3) note(`YouTubeを読み込めませんでした: ${error.code || '通信エラー'}`); });

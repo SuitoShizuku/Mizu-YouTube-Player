@@ -1,5 +1,16 @@
 const { isYouTube } = require('./core.cjs');
 const accountHosts = new Set(['accounts.google.com', 'accounts.google.co.jp', 'accounts.youtube.com']);
+function allowedWebNavigation(value) {
+  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !!url.hostname && !url.username && !url.password; }
+  catch { return false; }
+}
+function addressUrl(value) {
+  if (typeof value !== 'string' || value.length > 4000) throw Error('URLが不正です');
+  const text = value.trim();
+  const candidate = /^[a-z][a-z\d+.-]*:/i.test(text) && !/^[\w.-]+:\d+(?:\/|$)/.test(text) ? text : `https://${text}`;
+  if (!text || !allowedWebNavigation(candidate)) throw Error('HTTPまたはHTTPSのURLを入力してください');
+  return new URL(candidate).href;
+}
 function allowedNavigation(value) {
   try {
     const url = new URL(value);
@@ -27,4 +38,4 @@ function navigationCode(error) {
 }
 function wasAborted(error) { return error?.errno === -3 || error?.errorCode === -3 || navigationCode(error) === 'ERR_ABORTED'; }
 function safeLocation(value) { try { const url = new URL(value); return url.origin + url.pathname; } catch { return 'invalid-url'; } }
-module.exports = { allowedNavigation, signInUrl, navigationCode, wasAborted, safeLocation };
+module.exports = { allowedNavigation, allowedWebNavigation, addressUrl, signInUrl, navigationCode, wasAborted, safeLocation };

@@ -2,23 +2,9 @@
   if (window.__mizuInstalled) return;
   window.__mizuInstalled = true;
   const send = (type, value) => window.postMessage({ source: 'mizu-player', type, value }, location.origin, value instanceof ArrayBuffer ? [value] : []);
-  let context, worklet, initializing, normalizationOff = false;
-  const sources = new WeakMap();
+  let normalizationOff = false;
   const volumeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
   const hooked = new WeakSet();
-  async function initialize() {
-    if (worklet) return;
-    if (initializing) return initializing;
-    initializing = (async () => {
-      context = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
-      if (context.sampleRate !== 48000) throw Error('48 kHzのAudioContextを作成できません');
-      await context.audioWorklet.addModule('mizu-audio://host/worklet.js');
-      worklet = new AudioWorkletNode(context, 'mizu-output', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
-      worklet.port.onmessage = event => send('audio', event.data);
-      worklet.connect(context.destination);
-    })();
-    return initializing;
-  }
   function desiredVolume(fallback) {
     const player = document.querySelector('#movie_player');
     const volume = player?.getVolume?.();
@@ -39,25 +25,7 @@
       player?.setVolume?.(player.getVolume());
     }
   }
-  async function connect(video) {
-    if (sources.has(video)) return;
-    sources.set(video, null);
-    try {
-      await initialize();
-      const source = context.createMediaElementSource(video);
-      source.connect(worklet); sources.set(video, source);
-      await context.resume();
-      send('connected');
-      send('status', '音声ルーティング接続 · Web Audio → VST3 → 出力');
-      video.addEventListener('playing', playing);
-      if (!video.paused) playing();
-    } catch (error) {
-      video.pause();
-      send('status', `音声接続失敗 · ${error.message}`);
-    }
-  }
   function playing() {
-    context?.resume().catch(() => {});
     const player = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
     if (player?.classList.contains('ad-showing') || player?.classList.contains('ad-interrupting')) return;
     const media = player?.querySelector('video') || document.querySelector('video');
@@ -76,7 +44,7 @@
     if (id) send('playing', { videoId: id, fullUrl: location.href });
   }
   function scan() {
-    for (const video of document.querySelectorAll('video, audio')) { void connect(video); if (video.tagName === 'VIDEO') applyNormalization(video); }
+    for (const video of document.querySelectorAll('video')) applyNormalization(video);
     const controls = document.querySelector('.ytp-right-controls-left') || document.querySelector('.ytp-right-controls');
     if (controls && !controls.querySelector('.mizu-normalization')) {
       const button = document.createElement('button');
@@ -97,7 +65,6 @@
   window.addEventListener('message', event => {
     if (event.source === window && event.origin === location.origin && event.data?.source === 'mizu-settings') { normalizationOff = !!event.data.normalizationOff; scan(); }
   });
-  document.addEventListener('click', () => context?.resume().catch(() => {}), true);
   for (const event of ['yt-navigate-finish', 'yt-player-updated', 'yt-page-data-updated', 'yt-player-state-change']) {
     document.addEventListener(event, () => { scan(); playing(); });
   }
