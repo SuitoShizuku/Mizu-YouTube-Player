@@ -36,12 +36,12 @@
         <div id="rules"></div><button id="rule-add" class="add">＋ 転送先を追加</button>
         <details><summary>フォーマットで使える変数</summary><div id="variables"></div><p class="muted small">日付は日本時間。低評価数など取得できない値は「取得不可」と表示します。通知によるメンションは無効です。</p></details>
       </section>
-      <section class="card" id="audio-section"><h2>音声</h2><label class="check"><input id="normalization" type="checkbox">ラウドネスノーマライゼーションを無効化（実験的）</label><p class="muted small">プレイヤー内の「音量補正」ボタンでも切り替えできます。YouTubeの内部仕様に依存します。「一定音量 / Stable volume」はYouTube側でOFFにしてください。</p><p class="muted small">Windowsの既定の出力デバイスに自動で切り替わります。ヘッドホンの接続・取り外し後も、プラグインを挿し直す必要はありません。</p></section>
+      <section class="card" id="audio-section"><h2>音声</h2><label class="field">出力デバイス<select id="output-device"><option value="">システムの既定</option></select></label><p id="output-active" class="muted small" role="status"></p><label class="check"><input id="normalization" type="checkbox">ラウドネスノーマライゼーションを無効化（実験的）</label><p class="muted small">プレイヤー内の「音量補正」ボタンでも切り替えできます。YouTubeの内部仕様に依存します。「一定音量 / Stable volume」はYouTube側でOFFにしてください。</p><p class="muted small">選択はすぐに反映・保存されます。「システムの既定」はWindowsの出力先に追従します。選んだ機器が外れた場合は既定の出力を使い、再接続時に戻ります。</p></section>
       <section class="card" id="extension-section"><h2>Chrome拡張機能</h2><p class="muted">専用フォルダーに、拡張機能ごとの展開済みフォルダーを置いてください。</p><p class="muted small">例: Extensions / YouTubeEnhancer / manifest.json</p><div class="preset-actions"><button id="extensions-folder">フォルダーを開く</button><button id="extensions-scan">追加・削除を反映</button></div><p id="extensions-path" class="muted small"></p><div id="extensions-list"></div><p class="muted small">起動時に自動で読み込みます。追加・削除の反映時はYouTubeを再読み込みします。既存ファイルの更新後はアプリを再起動してください。ZIP・CRXは展開が必要です。Electronが対応していないAPIを使う機能は動作しない場合があります。</p></section>
       <div class="save-bar"><span id="save-status" role="status"></span><button id="save" class="primary">設定を保存</button></div>
     </div></div>
   </section>
-  <footer><span>◒ Mizu YouTube Player</span><span>v1.0.0</span></footer>
+  <footer><span>◒ Mizu YouTube Player</span><span>v1.0.1</span></footer>
   <dialog id="plugin-picker" aria-labelledby="picker-title">
     <div class="settings-heading"><h1 id="picker-title">プラグインを追加</h1><button id="picker-close" aria-label="一覧を閉じる">閉じる ×</button></div>
     <div class="catalog-toolbar"><input id="plugin-search" type="search" placeholder="名前・フォルダーで検索" aria-label="プラグインを検索"><button id="plugin-rescan">再スキャン</button></div>
@@ -50,5 +50,5 @@
     <details><summary>スキャン対象と対応形式</summary><p>Windows x64 / ステレオ VST3 に対応。VST2（.dll）は未対応です。DLLにはプラグイン以外のファイルも含まれます。</p><div id="catalog-roots"></div><p id="catalog-warnings"></p></details>
   </dialog>
   <div id="toast" role="status" hidden></div>
-  <script src="tab-audio.js"></script><script src="renderer.js"></script>
+  <script src="tab-audio.js"></script><script src="variable-suggestions.js"></script><script src="renderer.js"></script>
 </body></html>

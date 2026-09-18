@@ -20,7 +20,7 @@ class ExtensionFolder {
         let extension = this.loaded.get(directory);
         if (!extension) {
           extension = await this.session.extensions.loadExtension(directory, { allowFileAccess: false });
-          this.loaded.set(directory, extension); this.onLoaded?.(extension);
+          this.loaded.set(directory, extension); await this.onLoaded?.(extension);
         }
         entries.push({ id: extension.id, name: extension.name, version: extension.version, directory, options: manifest.options_ui?.page || manifest.options_page || '', loaded: true });
       } catch (error) { entries.push({ name: path.basename(directory), directory, loaded: false, error: error.message }); }

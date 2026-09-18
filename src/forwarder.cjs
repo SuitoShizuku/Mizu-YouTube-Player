@@ -30,9 +30,20 @@ class Forwarder {
       if (!item) throw Error('動画情報を取得できませんでした');
       if (generation !== this.generation) return;
       const data = { fullUrl, title: item.snippet.title, channel: item.snippet.channelTitle,
-        date: item.snippet.publishedAt, view: item.statistics?.viewCount, like: item.statistics?.likeCount,
+        categoryId: item.snippet.categoryId, date: item.snippet.publishedAt, view: item.statistics?.viewCount, like: item.statistics?.likeCount,
         dislike: item.statistics?.dislikeCount, duration: durationSeconds(item.contentDetails?.duration) };
       const matching = settings.rules.filter(rule => rule.categoryId === item.snippet.categoryId);
+      if (matching.some(rule => rule.format.includes('{channel-subscribers}')) && item.snippet.channelId) {
+        try {
+          const channelUrl = new URL('https://www.googleapis.com/youtube/v3/channels');
+          channelUrl.search = new URLSearchParams({ part: 'statistics', id: item.snippet.channelId, key: settings.apiKey });
+          const channelResponse = await this.request(channelUrl, { signal, redirect: 'error' });
+          if (channelResponse.ok) {
+            const statistics = (await channelResponse.json()).items?.[0]?.statistics;
+            if (!statistics?.hiddenSubscriberCount) data.channelSubscribers = statistics?.subscriberCount;
+          }
+        } catch (error) { if (signal.aborted) throw error; }
+      }
       for (const rule of matching) {
         if (generation !== this.generation) return;
         const content = formatMessage(rule.format, data);

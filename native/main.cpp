@@ -53,7 +53,7 @@ class Host : public juce::AudioIODeviceCallback, public juce::AudioSource, priva
     // 64 ms of headroom instead of consuming each packet immediately.
     static constexpr int prefillFrames = 3072;
     bool buffering = true;
-    juce::String lastDeviceError;
+    juce::String lastDeviceError, selectedOutput, lastOutputReport;
     std::map<juce::String, juce::PluginDescription> descriptionsByPath;
     std::deque<std::pair<uint32_t, juce::String>> pendingCommands;
     bool loadingPlugin = false;
@@ -61,13 +61,25 @@ class Host : public juce::AudioIODeviceCallback, public juce::AudioSource, priva
     void reportDeviceError(const juce::String& error) {
         if (error != lastDeviceError) { lastDeviceError = error; message("error", error); }
     }
-    void timerCallback() override { followDefaultOutput(); }
+    void reportOutputs(bool force = false) {
+        juce::Array<juce::var> names;
+        if (auto* type = devices.getCurrentDeviceTypeObject())
+            for (const auto& name : type->getDeviceNames(false)) names.add(name);
+        auto* event = new juce::DynamicObject(); event->setProperty("type", "outputs");
+        event->setProperty("devices", names); event->setProperty("selected", selectedOutput);
+        auto* current = devices.getCurrentAudioDevice();
+        event->setProperty("active", current != nullptr ? current->getName() : juce::String());
+        const juce::var value(event); const auto json = juce::JSON::toString(value, true);
+        if (force || json != lastOutputReport) { lastOutputReport = json; emit(value); }
+    }
+    void timerCallback() override { followDefaultOutput(); reportOutputs(); }
     void followDefaultOutput() {
         auto* type = devices.getCurrentDeviceTypeObject();
         if (type == nullptr) return;
         type->scanForDevices();
         const auto names = type->getDeviceNames(false);
-        const int index = type->getDefaultDeviceIndex(false);
+        const int requested = names.indexOf(selectedOutput);
+        const int index = selectedOutput.isNotEmpty() && requested >= 0 ? requested : type->getDefaultDeviceIndex(false);
         if (!juce::isPositiveAndBelow(index, names.size())) {
             devices.closeAudioDevice();
             reportDeviceError("音声出力が見つかりません。接続後に自動で再開します"); return;
@@ -185,6 +197,8 @@ public:
         auto* event = new juce::DynamicObject(); event->setProperty("type", "plugins"); event->setProperty("plugins", plugins); emit(juce::var(event));
     }
     void command(uint32_t type, const juce::String& payload) {
+        if (type == 11) { followDefaultOutput(); reportOutputs(true); return; }
+        if (type == 12) { selectedOutput = payload; followDefaultOutput(); reportOutputs(true); return; }
         if (type == 10) {
 #ifdef _WIN32
             const auto ids = juce::JSON::parse(payload);
@@ -355,7 +369,7 @@ int main(int argc, char* argv[]) {
             std::vector<char> payload(header[1]);
             if (header[1] && std::fread(payload.data(), 1, payload.size(), stdin) != payload.size()) break;
             if (header[0] == 1) host.push(payload);
-            else if (header[0] >= 2 && header[0] <= 10) {
+            else if (header[0] >= 2 && header[0] <= 12) {
                 const auto text = juce::String::fromUTF8(payload.data(), static_cast<int>(payload.size()));
                 juce::MessageManager::callAsync([&host, type = header[0], text] { host.command(type, text); });
             }

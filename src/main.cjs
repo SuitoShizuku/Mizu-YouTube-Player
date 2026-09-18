@@ -51,16 +51,30 @@ async function inject() {
     view.webContents.send('normalization', store.value.normalizationOff);
   } catch { note('YouTubeのコントロールを読み込めませんでした'); }
 }
-function extensionLoaded(extension) {
+async function extensionLoaded(extension) {
   if (!extension.name.toLowerCase().includes('ublock')) return;
   status.extension = extension.name + ' 読込済み';
-  let attempts = 0;
-  const probe = setInterval(async () => {
-    if (!win || win.isDestroyed() || ++attempts > 20) { clearInterval(probe); return; }
+  const deadline = Date.now() + 30000;
+  while (win && !win.isDestroyed() && !closing && Date.now() < deadline) {
     const background = webContents.getAllWebContents().find(wc => wc.getURL() === 'chrome-extension://' + extension.id + '/background.html');
-    if (!background) return;
-    try { if (await background.executeJavaScript('Boolean(globalThis.µBlock?.readyToFilter)')) { status.extension = extension.name + ' · フィルター準備完了'; publish(); clearInterval(probe); } } catch {}
-  }, 1000); probe.unref();
+    try {
+      // readyToFilter is set before initializeTabs / webRequest.start finish.
+      // isReady resolves only after startup request suspension has been lifted.
+      let ready = false;
+      if (background && !background.isLoadingMainFrame()) {
+        let timer;
+        try {
+          ready = await Promise.race([
+            background.executeJavaScript('import("./js/background.js").then(({ default: u }) => u.readyToFilter && u.supportStats.allReadyAfter !== "?")'),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })
+          ]);
+        } finally { clearTimeout(timer); }
+      }
+      if (ready) { status.extension = extension.name + ' · フィルター準備完了'; publish(); return; }
+    } catch { /* The background page may still be starting. */ }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!closing) note('uBlock Originの初期化が時間内に完了しませんでした。拡張機能の設定を確認してください。');
 }
 function openExtensionPage(url) {
   const parsed = new URL(url);
@@ -161,8 +175,9 @@ async function createWindow() {
   handle('extension-options', id => { openExtensionPage(extensionFolder.optionsUrl(id)); });
   host.on('status', message => { status.audio = message; status.plugins = host.plugins; status.loadingPlugin = ''; view.webContents.setAudioMuted(true); publish(); note(message); });
   host.on('event', event => {
-    if (event.type === 'ready') { status.audio = 'ホスト接続済み · 48 kHz / Stereo'; maintainRealtimeScheduling(); }
+    if (event.type === 'ready') { host.command(12, store.value.outputDevice); status.audio = 'ホスト接続済み · 48 kHz / Stereo'; maintainRealtimeScheduling(); }
     if (event.type === 'realtime-policy') return;
+    if (event.type === 'outputs') { status.outputs = { devices: event.devices, selected: event.selected, active: event.active }; }
     if (event.type === 'plugins') status.plugins = event.plugins;
     if (event.type === 'plugin-loading') status.loadingPlugin = event.message;
     if (event.type === 'plugin-finished') status.loadingPlugin = '';
@@ -179,8 +194,15 @@ async function createWindow() {
   handle('back', () => { if (view.webContents.navigationHistory.canGoBack()) view.webContents.navigationHistory.goBack(); });
   handle('reload', () => view.webContents.reload());
   handle('copy', () => { const current = view.webContents.getURL(); const url = shortUrl(current) || (allowedWebNavigation(current) ? current : ''); if (!url) throw Error('ページを開いてください'); clipboard.writeText(url); return url; });
+  handle('output-devices', async () => { await host.ensureReady(); host.command(11); });
+  handle('output-device', async name => {
+    if (typeof name !== 'string' || (name !== '' && !status.outputs?.devices.includes(name))) throw Error('出力デバイスが見つかりません');
+    await host.ensureReady();
+    const value = store.save({ ...store.value, outputDevice: name });
+    host.command(12, value.outputDevice); return value.outputDevice;
+  });
   handle('settings-open', open => { settingsOpen = !!open; bounds(); });
-  handle('settings-save', settings => { const value = store.save(settings); forwarder.cancel(); view.webContents.send('normalization', value.normalizationOff); return value; });
+  handle('settings-save', settings => { const value = store.save({ ...settings, outputDevice: store.value.outputDevice }); forwarder.cancel(); view.webContents.send('normalization', value.normalizationOff); return value; });
   handle('plugin-catalog', refresh => catalog.scan(refresh === true));
   handle('plugin-picker-open', open => { pickerOpen = !!open; bounds(); });
   handle('plugin-add', async id => {
@@ -237,6 +259,7 @@ async function createWindow() {
   await startAudioCapture();
   audioRouteTimer = setInterval(startAudioCapture, 3000);
   await extensionFolder.scan();
+  if (closing || !win || win.isDestroyed()) return;
   if (loadError) note(loadError);
   await view.webContents.loadURL('https://www.youtube.com/').catch(error => { if (error.code !== 'ERR_ABORTED' && error.errno !== -3) note(`YouTubeを読み込めませんでした: ${error.code || '通信エラー'}`); });
 }

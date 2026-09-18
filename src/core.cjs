@@ -8,7 +8,9 @@ const CATEGORY_LIST = [
   ['38', '外国映画'], ['39', 'ホラー'], ['40', 'SF／ファンタジー'], ['41', 'スリラー'],
   ['42', '短編'], ['43', '番組'], ['44', '予告編']
 ].map(([id, title]) => ({ id, title }));
-const VARIABLES = ['url', 'full-url', 'title', 'channel', 'view', 'like', 'dislike', 'date', 'relative-date', 'duration', 'format-duration'];
+const CATEGORY_EN = ['Film & Animation', 'Autos & Vehicles', 'Music', 'Pets & Animals', 'Sports', 'Travel & Events', 'Gaming', 'People & Blogs', 'Comedy', 'Entertainment', 'News & Politics', 'Howto & Style', 'Education', 'Science & Technology', 'Nonprofits & Activism', 'Movies', 'Anime/Animation', 'Action/Adventure', 'Classics', 'Comedy', 'Documentary', 'Drama', 'Family', 'Foreign', 'Horror', 'Sci-Fi/Fantasy', 'Thriller', 'Shorts', 'Shows', 'Trailers'];
+CATEGORY_LIST.forEach((category, index) => { category.titleEn = CATEGORY_EN[index]; });
+const VARIABLES = ['url', 'full-url', 'title', 'channel', 'channel-subscribers', 'view', 'format-view-en', 'format-view-ja', 'like', 'dislike', 'date', 'relative-date', 'duration', 'format-duration', 'genre', 'genre-en'];
 function videoId(value) {
   try {
     const u = new URL(value);
@@ -56,10 +58,24 @@ function durationSeconds(iso) {
   const m = /^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/.exec(iso || '');
   return m ? Math.floor(Number(m[1] || 0) * 86400 + Number(m[2] || 0) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0)) : null;
 }
+function compactCount(value, language) {
+  if (!/^\d+$/.test(String(value ?? ''))) return null;
+  const count = BigInt(value);
+  const units = language === 'ja' ? [[100000000n, '億'], [10000n, '万']] : [[1000000000n, 'B'], [1000000n, 'M'], [1000n, 'k']];
+  for (const [unit, suffix] of units) {
+    if (count < unit) continue;
+    const tenths = count * 10n / unit;
+    return String(tenths / 10n) + (tenths % 10n ? '.' + String(tenths % 10n) : '') + suffix;
+  }
+  return String(count);
+}
 function formatMessage(template, data, now) {
+  const category = CATEGORY_LIST.find(c => c.id === data.categoryId);
   const seconds = Number.isFinite(data.duration) ? Math.max(0, Math.floor(data.duration)) : null;
   const vars = {
     url: shortUrl(data.fullUrl), 'full-url': data.fullUrl, title: data.title, channel: data.channel,
+    'channel-subscribers': data.channelSubscribers, genre: category?.title, 'genre-en': category?.titleEn,
+    'format-view-en': compactCount(data.view, 'en'), 'format-view-ja': compactCount(data.view, 'ja'),
     view: data.view, like: data.like, dislike: data.dislike,
     date: formatDate(data.date), 'relative-date': relativeDate(data.date, now),
     duration: seconds === null ? null : `${seconds}秒`,
@@ -69,6 +85,8 @@ function formatMessage(template, data, now) {
 }
 function validateSettings(input) {
   if (!input || typeof input !== 'object') throw Error('設定が不正です');
+  const outputDevice = input.outputDevice ?? '';
+  if (typeof outputDevice !== 'string' || outputDevice.length > 512 || outputDevice.includes('\0')) throw Error('出力デバイスが不正です');
   if (typeof input.apiKey !== 'string' || input.apiKey.length > 200) throw Error('APIキーが不正です');
   if (!Array.isArray(input.rules) || input.rules.length > 50) throw Error('転送ルールは50件までです');
   const rules = input.rules.map(rule => {
@@ -80,6 +98,6 @@ function validateSettings(input) {
     return { categoryId: rule.categoryId, url: rule.url, format: rule.format };
   });
   if (input.forwarding && !input.apiKey.trim()) throw Error('転送にはYouTube Data API v3キーが必要です');
-  return { apiKey: input.apiKey.trim(), forwarding: !!input.forwarding, normalizationOff: !!input.normalizationOff, rules };
+  return { outputDevice, apiKey: input.apiKey.trim(), forwarding: !!input.forwarding, normalizationOff: !!input.normalizationOff, rules };
 }
 module.exports = { CATEGORY_LIST, VARIABLES, videoId, shortUrl, playbackUrl, isYouTube, validWebhook, formatMessage, relativeDate, formatDate, durationSeconds, validateSettings };

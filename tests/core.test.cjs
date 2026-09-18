@@ -29,3 +29,19 @@ test('settings validation prevents unknown variables and forwarding without API 
   assert.throws(() => validateSettings({ ...input, rules: [{ ...input.rules[0], format: '{unknown}' }] }));
   assert.throws(() => validateSettings({ ...input, rules: [{ ...input.rules[0], categoryId: '999' }] }));
 });
+
+test('compact counts truncate one decimal and preserve missing versus zero', () => {
+  for (const [view, en, ja] of [['12500','12.5k','1.2万'],['0','0','0'],['999','999','999'],['1000','1k','1000'],['1000000','1M','100万'],['1000000000','1B','10億'],[undefined,'取得不可','取得不可']]) {
+    assert.equal(formatMessage('{format-view-en}|{format-view-ja}', {view}), `${en}|${ja}`);
+  }
+  assert.equal(formatMessage('{channel-subscribers}|{genre}|{genre-en}', {channelSubscribers:'0',categoryId:'10'}), '0|音楽|Music');
+  assert.equal(formatMessage('{genre}|{genre-en}', {categoryId:'27'}), '教育|Education');
+  assert.equal(formatMessage('{channel-subscribers}|{genre}', {}), '取得不可|取得不可');
+});
+
+test('output device defaults migrate and selection is validated', () => {
+  const input={apiKey:'',forwarding:false,rules:[]};
+  assert.equal(validateSettings(input).outputDevice,'');
+  assert.equal(validateSettings({...input,outputDevice:'Headphones'}).outputDevice,'Headphones');
+  for(const outputDevice of [123,'x'.repeat(513),'a\0b']) assert.throws(()=>validateSettings({...input,outputDevice}));
+});

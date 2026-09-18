@@ -26,7 +26,7 @@ npm start
 npm run dist
 ```
 
-出力先は `dist/Mizu YouTube Player 1.0.0.exe`。ビルド時にVSTホストと展開済みuBlock Originを同梱します。コード署名は未設定です。
+出力先は `dist/Mizu YouTube Player 1.0.1.exe`。ビルド時にVSTホストと展開済みuBlock Originを同梱します。コード署名は未設定です。
 
 ## 操作
 
@@ -42,6 +42,8 @@ npm run dist
 
 ## Webhook
 
+v1.0.1: フォーマット欄で`{`を入力すると変数候補を表示します。続けて入力すると絞り込み、上下キーとEnter／Tabまたはクリックで挿入、Escで閉じます。省略再生数は小数1桁で切り捨て、末尾の`.0`を省略します。登録者数の追加取得は該当する転送先がその変数を使用する場合のみ行い、取得失敗・非公開時も「取得不可」として転送します。
+
 ジャンルなどの正確な取得にはYouTube Data API v3のAPIキーが必要です。APIを有効にしたキーを設定してください。APIキー・Webhook URLはElectron `safeStorage`で暗号化し、アプリの`userData/settings.enc`に保存します。YouTubeページにはキーを渡しません。
 
 | 変数 | 内容 |
@@ -50,6 +52,10 @@ npm run dist
 | `{full-url}` | 再生開始時のURL（時刻・プレイリストを保持） |
 | `{title}` | 動画タイトル |
 | `{channel}` | 投稿チャンネル |
+| `{channel-subscribers}` | 投稿チャンネルの公開登録者数（APIの有効数字3桁の値） |
+| `{format-view-en}` | 再生数をk / M / Bで表示（12500 → 12.5k） |
+| `{format-view-ja}` | 再生数を万 / 億で表示（12500 → 1.2万） |
+| `{genre}` / `{genre-en}` | ジャンルの日本語／英語名（音楽／Music） |
 | `{view}` / `{like}` / `{dislike}` | 再生数／高評価数／低評価数 |
 | `{date}` | 日本時間の`YYYY/MM/DD/HH/MM` |
 | `{relative-date}` | n分前・n時間前・n日前・nヶ月前・n年前 |
@@ -61,6 +67,10 @@ npm run dist
 実際の再生イベント／再生中の動画IDを確認して通知します。同じ動画のポーリングは重複送信せず、別の動画を再生してから戻れば再送信します。広告再生中は転送しません。SPA遷移で以前の取得が残った場合は中断します。Discordのメンションは無効化し、送信後の成否が曖昧な場合や429時に自動再試行はしません。実際のWebhookへの送信は、接続先未提供のため未検証です。
 
 ## 音声処理
+
+v1.0.1: 設定 → 音声 → 出力デバイスから、システムの既定または個別の出力を選択できます。変更は即時保存・適用され、再起動後も復元します。指定先が未接続なら既定へ一時退避し、再接続時に戻ります。デバイス一覧は750ms間隔で更新します。VSTチェーンは切替時も維持します。識別にはJUCEのデバイス名を使用するため、Windows側で名称を変更した場合は選び直してください。
+
+`node scripts/output-device-smoke.cjs`で実デバイス切替・欠落先へのフォールバック・VST維持を検証し、`electron scripts/output-settings-smoke.cjs save .local/任意のプロファイル`と`restore`でUI保存／次回起動を検証します。
 
 ```text
 Player WebContents (HTML media / Web Audio / iframe)
@@ -79,7 +89,7 @@ Chromiumの音声出力は常時ミュート。Workletもブラウザー出力�
 
 - Windows x64 / ステレオVST3エフェクトが対象です。VST処理は48 kHzで行い、出力先のサンプルレートへ変換します。
 - Windowsの既定出力を750 ms間隔で確認し、変更・切断・再接続時にはVSTチェーンを保持して出力を再開します。44.1/48/96 kHzの出力変換をオフラインテスト済みです。
-- VST2、楽器・MIDI、サイドチェイン、並べ替え、出力デバイス選択、プラグイン遅延補償は未実装です。
+- VST2、楽器・MIDI、サイドチェイン、並べ替え、プラグイン遅延補償は未実装です。
 - 音声のコピーとキューを使用する初期実装です。高負荷時は音切れの可能性があり、厳密な低遅延保証や長時間のクロック差補正はありません。
 - 出力は非有限値をゼロにし、最終段で±1に制限します。
 - 音量補正OFFはYouTubeがHTMLMediaElementに設定する減衰を操作音量へ戻す実験的実装です。YouTubeの内部仕様変更、動画ごとの挙動、Stable volumeの処理には依存が残ります。Stable volumeはYouTubeの設定でもOFFにしてください。
@@ -111,6 +121,8 @@ Chromiumの音声出力は常時ミュート。Workletもブラウザー出力�
 `node scripts/chain-regression.cjs`で実VST状態の往復・ホスト再起動・欠落プラグイン保護を検証します。`electron scripts/persistence-smoke.cjs save .local/任意の新規プロファイル`、続けて`restore`でアプリ終了時保存・次回起動復元を検証します。
 
 ## uBlock Origin
+
+v1.0.1の起動修正: uBlockの読み込みだけでなく、フィルター初期化と通信の一時停止解除が終わるまで、最初のYouTube読み込みを待ちます。起動途中の背景ページへの問い合わせは1秒、全体は30秒を上限にし、時間超過時は通知します。`electron scripts/startup-smoke.cjs .local/任意のテストプロファイル --assert`で初回／再起動の画像取得と動画再生を検証します（音声出力はテスト中のみ停止）。
 
 公式uBlock Origin 1.74.0を変更せず読み込みます。Electron標準APIを`electron-chrome-extensions`で補完しています。フィルター初期化は内部で確認し、画面には接続状態や準備完了の表示を出しません。すべてのYouTube広告をブロックできるという保証はありません。
 

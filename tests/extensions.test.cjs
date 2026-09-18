@@ -19,3 +19,15 @@ test('loads multiple unpacked extensions, isolates bad manifests, removes missin
   fs.rmSync(path.join(root, 'enhancer'), { recursive: true }); await manager.scan(); assert.deepEqual(removed, ['enhancer']);
   assert.throws(() => manager.optionsUrl('enhancer'));
 });
+
+test('scan waits for extension startup before allowing page navigation', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mizu-startup-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bundled = path.join(dir, 'bundled'); fs.mkdirSync(bundled);
+  fs.writeFileSync(path.join(bundled, 'manifest.json'), '{"name":"uBlock Origin"}');
+  let finish, started; const entered = new Promise(resolve => { started = resolve; });
+  const session = { extensions: { loadExtension: async () => ({id:'test',name:'uBlock Origin'}), removeExtension() {} } };
+  const manager = new ExtensionFolder(path.join(dir,'Extensions'), session, bundled, () => { started(); return new Promise(resolve => { finish=resolve; }); });
+  let navigated=false;const loading=manager.scan().then(()=>{navigated=true;});
+  await entered;assert.equal(navigated,false);finish();await loading;assert.equal(navigated,true);
+});

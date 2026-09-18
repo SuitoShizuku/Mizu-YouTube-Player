@@ -20,7 +20,7 @@ child.stderr.on('data', async chunk => {
   if (!match || started) return;
   started = true;
   try {
-    await new Promise(resolve => setTimeout(resolve, 8000));
+    await new Promise(resolve => setTimeout(resolve, 15000));
     const targets = await (await fetch(`http://127.0.0.1:${match[1]}/json`)).json();
     const shell = targets.find(target => target.url.includes('/ui/index.html'));
     if (!shell) throw Error('Packaged UI did not load');
@@ -84,6 +84,21 @@ child.stderr.on('data', async chunk => {
     const audio = await evaluate(shell.webSocketDebuggerUrl, 'window.mizuAudio.start()');
     if (!audio.active || audio.sampleRate !== 48000) throw Error('Packaged external tab audio capture failed');
     console.log('PACKAGED_TAB_AUDIO', JSON.stringify(audio));
+    const suggestions = await evaluate(shell.webSocketDebuggerUrl, `(async () => {
+      await document.getElementById('settings-button').onclick();
+      document.getElementById('rule-add').click();
+      const input=document.querySelector('.rule:last-child .format');
+      function type(text, caret=text.length) {input.focus();input.value=text;input.setSelectionRange(caret,caret);input.dispatchEvent(new Event('input',{bubbles:true}));}
+      function key(key) {input.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));}
+      type('{'); const menu=input.nextElementSibling;const count=menu.children.length;
+      type('before {format-v');const filtered=menu.children.length;key('ArrowDown');key('Enter');const keyboard=input.value;
+      type('{genre} tail',6);menu.children[0].click();const mouse=input.value;
+      type('{');key('Escape');const escaped=menu.hidden;
+      type('{like} {view} {channel-subscribers}');
+      return {count,filtered,keyboard,mouse,escaped,preview:document.querySelector('.rule:last-child .preview').textContent};
+    })()`);
+    if(suggestions.count!==16 || suggestions.filtered!==2 || suggestions.keyboard!=='before {format-view-ja}' || suggestions.mouse!=='{genre} tail' || !suggestions.escaped || !suggestions.preview.includes('123000')) throw Error('Variable suggestions failed: '+JSON.stringify(suggestions));
+    console.log('PACKAGED_SUGGESTIONS',JSON.stringify(suggestions));
     fs.writeFileSync('.local/package-smoke.json', JSON.stringify(state, null, 2));
     clearTimeout(deadline);
     child.kill();

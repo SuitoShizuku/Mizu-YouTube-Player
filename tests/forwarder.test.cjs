@@ -47,3 +47,28 @@ test('expanded messages over Discord limit never get sent', async () => {
   const forwarder = new Forwarder(settings, () => {}, async (_u, options) => { if (options.method) posted = true; return { ok: true, json: async () => ({ items: [{ ...item, snippet: { ...item.snippet, title: 'x'.repeat(2100) } }] }) }; });
   await forwarder.playing(url); assert.equal(posted, false);
 });
+
+test('subscriber lookup is shared and hidden or failed counts do not stop forwarding', async () => {
+  for (const mode of ['public','hidden','failure']) {
+    const calls = []; const posts = [];
+    const f = new Forwarder(() => ({...settings(), rules:[{...rule,format:'{channel-subscribers}|{genre}|{genre-en}'}]}), () => {}, async (u, options) => {
+      calls.push(String(u));
+      if(options.method === 'POST') { posts.push(JSON.parse(options.body).content); return {ok:true}; }
+      if(new URL(u).pathname.endsWith('/channels')) return {ok:mode !== 'failure',json:async()=>({items:[{statistics:{subscriberCount:'12300',hiddenSubscriberCount:mode==='hidden'}}]})};
+      return {ok:true,json:async()=>({items:[{...item,snippet:{...item.snippet,channelId:'test-channel'}}]})};
+    });
+    await f.playing(url);
+    assert.equal(calls.length,3);
+    assert.equal(posts[0],(mode==='public'?'12300':'取得不可')+'|音楽|Music');
+  }
+});
+
+test('navigation during subscriber lookup cancels obsolete webhook', async () => {
+  let complete; let started; const ready = new Promise(resolve => started=resolve); const posts=[];
+  const f=new Forwarder(()=>({...settings(),rules:[{...rule,format:'{channel-subscribers}'}]}),()=>{},async(u,options)=>{
+    if(options.method==='POST'){posts.push(options.body);return {ok:true};}
+    if(new URL(u).pathname.endsWith('/channels')) {started();return new Promise(resolve=>complete=resolve);}
+    return {ok:true,json:async()=>({items:[{...item,snippet:{...item.snippet,channelId:'test'}}]})};
+  });
+  const work=f.playing(url);await ready;f.cancel();complete({ok:true,json:async()=>({items:[]})});await work;assert.equal(posts.length,0);
+});

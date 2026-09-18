@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const operations = new Set(['initial', 'navigate', 'back', 'reload', 'copy', 'settings-open', 'settings-save', 'presets', 'preset-save', 'preset-load', 'preset-delete', 'extensions-info', 'extensions-scan', 'extensions-folder', 'extension-options', 'plugin-catalog', 'plugin-picker-open', 'plugin-add', 'plugin-action']);
+const operations = new Set(['output-devices', 'output-device', 'initial', 'navigate', 'back', 'reload', 'copy', 'settings-open', 'settings-save', 'presets', 'preset-save', 'preset-load', 'preset-delete', 'extensions-info', 'extensions-scan', 'extensions-folder', 'extension-options', 'plugin-catalog', 'plugin-picker-open', 'plugin-add', 'plugin-action']);
 contextBridge.exposeInMainWorld('mizu', {
   sendAudio: buffer => { if (buffer instanceof ArrayBuffer && buffer.byteLength === 8192) ipcRenderer.send('routed-audio', buffer); },
   reportAudio: (connected, message) => ipcRenderer.send('audio-route-status', !!connected, String(message).slice(0, 300)),

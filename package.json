@@ -1,6 +1,6 @@
 {
   "name": "mizu-youtube-player",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "YouTube player with an internal Windows VST3 audio host",
   "main": "src/main.cjs",

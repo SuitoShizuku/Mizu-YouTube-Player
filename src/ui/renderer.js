@@ -20,6 +20,19 @@ function setIcon(el, icon, label) {
 }
 function iconButton(icon, label, callback) { return setIcon(button('', callback), icon, label); }
 function renderState(state) {
+  if (state.outputs) {
+    const { devices, selected, active } = state.outputs;
+    const select = $('output-device');
+    const entries = [['', 'システムの既定'], ...devices.map(name => [name, name])];
+    if (selected && !devices.includes(selected)) entries.push([selected, selected + '（未接続）']);
+    const signature = JSON.stringify(entries);
+    if (select.dataset.entries !== signature) {
+      select.replaceChildren(...entries.map(([value, label]) => { const option = document.createElement('option'); option.value = value; option.textContent = label; return option; }));
+      select.dataset.entries = signature;
+    }
+    select.value = selected;
+    $('output-active').textContent = active ? '現在の出力: ' + active : '出力デバイスがありません';
+  }
   if (document.activeElement !== $('address')) $('address').value = state.url;
   $('plugin-count').textContent = `${state.plugins.length} / 16`;
   $('plugin-loading').hidden = !state.loadingPlugin;
@@ -48,9 +61,9 @@ function addRule(rule = { categoryId: '10', url: '', format: '🎵 {title}\n{cha
   const format = document.createElement('textarea'); format.className = 'format'; format.value = rule.format; format.maxLength = 1800;
   field('ジャンル', genre); field('Webhook URL', url); field('フォーマット', format);
   const preview = document.createElement('div'); preview.className = 'preview';
-  const sample = { url: 'https://youtu.be/dQw4w9WgXcQ', 'full-url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30', title: 'サンプル動画', channel: 'サンプルチャンネル', view: '123456', like: '1234', dislike: '取得不可', date: '2026/09/16/12/00', 'relative-date': '1時間前', duration: '213秒', 'format-duration': '3分33秒' };
+  const sample = { url: 'https://youtu.be/dQw4w9WgXcQ', 'full-url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30', title: 'サンプル動画', channel: 'サンプルチャンネル', 'channel-subscribers': '123000', view: '12500', 'format-view-en': '12.5k', 'format-view-ja': '1.2万', genre: '音楽', 'genre-en': 'Music', like: '1234', dislike: '取得不可', date: '2026/09/16/12/00', 'relative-date': '1時間前', duration: '213秒', 'format-duration': '3分33秒' };
   function updatePreview() { preview.textContent = 'プレビュー（サンプル）\n' + format.value.replace(/\{([^{}]+)\}/g, (m, key) => sample[key] ?? m); }
-  format.addEventListener('input', updatePreview); updatePreview(); el.append(preview); $('rules').append(el);
+  format.addEventListener('input', updatePreview); updatePreview(); el.append(preview); $('rules').append(el); window.attachVariableSuggestions(format, variables);
 }
 function fillSettings(value) {
   settings = value; $('api-key').value = value.apiKey; $('forwarding').checked = value.forwarding; $('normalization').checked = value.normalizationOff;
@@ -64,7 +77,7 @@ $('settings-button').onclick = async () => {
   $('settings').hidden = !open;
   $('settings-button').setAttribute('aria-pressed', String(open));
   await action('settings-open', open);
-  if (open) { const info = await action('extensions-info'); if (info) renderExtensions(info); }
+  if (open) { await action('output-devices'); const info = await action('extensions-info'); if (info) renderExtensions(info); }
 };
 let catalogData, scanning = false;
 function renderCatalog() {
@@ -196,6 +209,12 @@ $('extensions-scan').onclick = async () => {
   finally { $('extensions-scan').disabled = false; }
 };
 (async () => { const items = await action('presets'); if (items) renderPresets(items); const info = await action('extensions-info'); if (info) renderExtensions(info); })();
+$('output-device').onchange = async () => {
+  const select = $('output-device'); select.disabled = true;
+  try { settings.outputDevice = await invoke('output-device', select.value); }
+  catch (error) { select.value = settings.outputDevice || ''; toast(error.message); }
+  finally { select.disabled = false; }
+};
 $('rule-add').onclick = () => { if ($('rules').children.length < 50) addRule(); else toast('転送先は50件までです'); };
 $('save').onclick = async () => {
   const rules = [...document.querySelectorAll('.rule')].map(el => ({ categoryId: el.querySelector('.category').value, url: el.querySelector('.webhook').value.trim(), format: el.querySelector('.format').value }));

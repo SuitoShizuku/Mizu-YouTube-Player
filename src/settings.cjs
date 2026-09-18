@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateSettings } = require('./core.cjs');
-const defaults = () => ({ apiKey: '', forwarding: false, normalizationOff: false, rules: [] });
+const defaults = () => ({ outputDevice: '', apiKey: '', forwarding: false, normalizationOff: false, rules: [] });
 class SettingsStore {
   constructor(directory, safeStorage) { this.file = path.join(directory, 'settings.enc'); this.crypto = safeStorage; this.value = defaults(); }
   load() {
